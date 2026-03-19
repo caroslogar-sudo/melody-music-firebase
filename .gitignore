@@ -1,4 +1,29 @@
-node_modules
-dist
+# --- SEGURIDAD (Lo más importante) ---
 .env
 .env.local
+.env.development.local
+.env.test.local
+.env.production.local
+# Ignorar archivos de configuración si contienen llaves
+config.js
+credentials.json
+
+# --- DEPENDENCIAS ---
+node_modules/
+jspm_packages/
+
+# --- ARCHIVOS DE COMPILACIÓN (Build) ---
+/build
+/dist
+/.next/
+/out
+
+# --- FIREBASE ---
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# --- SISTEMA ---
+.DS_Store
+Thumbs.db
