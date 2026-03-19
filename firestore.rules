@@ -1,0 +1,68 @@
+// ============================================================
+// REGLAS DE SEGURIDAD - FIRESTORE
+// ============================================================
+// Copia este contenido en Firebase Console:
+// Firestore Database → Reglas → Pega y publica
+// ============================================================
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: check if user is authenticated
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // Helper: check if user is admin
+    function isAdmin() {
+      return isAuth() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+
+    // Helper: check if user is approved
+    function isApproved() {
+      return isAuth() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.approved == true;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      // Anyone authenticated can read user profiles
+      allow read: if isAuth();
+      // Users can update their own profile (except role and approved fields)
+      allow update: if isAuth() && request.auth.uid == userId &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'approved']);
+      // Admins can do anything with users
+      allow write: if isAdmin();
+      // Allow creating own profile on first login
+      allow create: if isAuth() && request.auth.uid == userId;
+    }
+
+    // Tracks collection
+    match /tracks/{trackId} {
+      allow read: if isApproved();
+      allow write: if isAdmin();
+    }
+
+    // Trash collection
+    match /trash/{trashId} {
+      allow read: if isApproved();
+      allow write: if isAdmin();
+    }
+
+    // Playlists collection
+    match /playlists/{playlistId} {
+      allow read: if isApproved();
+      allow create: if isApproved();
+      allow update, delete: if isApproved();
+    }
+
+    // Config collection (storage usage, etc.)
+    match /config/{configId} {
+      allow read: if isApproved();
+      allow write: if isAdmin();
+    }
+  }
+}

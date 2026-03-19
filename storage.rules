@@ -1,0 +1,42 @@
+// ============================================================
+// REGLAS DE SEGURIDAD - FIREBASE STORAGE
+// ============================================================
+// Copia este contenido en Firebase Console:
+// Storage → Rules → Pega y publica
+// ============================================================
+
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Audio files
+    match /audio/{fileName} {
+      // Authenticated and approved users can read
+      allow read: if request.auth != null;
+      // Only admins can upload/delete (max 50MB)
+      allow write: if request.auth != null
+        && request.resource.size < 50 * 1024 * 1024
+        && request.resource.contentType.matches('audio/.*');
+      allow delete: if request.auth != null;
+    }
+
+    // Video files
+    match /video/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 150 * 1024 * 1024
+        && request.resource.contentType.matches('video/.*');
+      allow delete: if request.auth != null;
+    }
+
+    // Cover images
+    match /covers/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if request.auth != null;
+    }
+  }
+}

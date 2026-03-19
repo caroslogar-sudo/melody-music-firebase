@@ -1,0 +1,8 @@
+[
+  {
+    "origin": ["http://localhost:3000", "http://localhost:5173", "https://mcadance.es", "https://www.mcadance.es"],
+    "method": ["GET", "HEAD", "PUT", "POST", "DELETE"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": ["Content-Type", "Content-Range", "Accept-Ranges", "Range"]
+  }
+]
