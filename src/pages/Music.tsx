@@ -5,8 +5,9 @@ import { UploadProgress } from '../components/ui/UploadProgress';
 import { uploadFile, canUpload } from '../services/storageService';
 import { addTrackToFirestore } from '../services/trackService';
 import { useCovers, getCoverFallback } from '../hooks/useCovers';
-import { Upload, Play, Trash2, FolderPlus, ArrowLeft, Music as MusicIcon, Edit2, Folder, FolderInput, Search, X, Share2, Users } from 'lucide-react';
+import { Upload, Play, Trash2, FolderPlus, ArrowLeft, Music as MusicIcon, Edit2, Folder, FolderInput, Search, X, Share2, Users, Heart } from 'lucide-react';
 import { Track, UserRole } from '../types';
+import { subscribeFavorites, toggleFavorite } from '../services/favoritesService';
 
 export const Music = () => {
   const { library, playTrack, playQueue, removeTrackToTrash, updateTrack, currentTrack, isPlaying, user, renameFolder, deleteFolder, refreshStorageUsage, groups, users } = useApp();
@@ -31,6 +32,19 @@ export const Music = () => {
   const [uploadWarning, setUploadWarning] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [shareWith, setShareWith] = useState<string[]>([]);
+  const [favIds, setFavIds] = useState<Set<string>>(new Set());
+
+  // Subscribe to user favorites
+  useEffect(() => {
+    if (!user) return;
+    const unsub = subscribeFavorites(user.uid, (ids) => setFavIds(new Set(ids)));
+    return () => unsub();
+  }, [user?.uid]);
+
+  const handleToggleFav = (trackId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (user) toggleFavorite(user.uid, trackId);
+  };
 
   const isMaster = user?.role === UserRole.MASTER;
   const isAdmin = user?.role === UserRole.ADMIN || isMaster;
@@ -104,27 +118,16 @@ export const Music = () => {
     if (tracks.length > 0) playQueue(tracks, 0);
   };
 
+  // Multi-upload state
+  const [multiUpload, setMultiUpload] = useState<{ total: number; done: number; current: string } | null>(null);
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files?.[0] || !user) return;
-    const file = files[0];
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0 || !user) return;
+    const files = Array.from(fileList);
 
-    // Check storage limits
-    const check = await canUpload(file.size);
-    if (!check.allowed) {
-      setUploadStatus('error');
-      setUploadFileName(file.name);
-      setUploadWarning(check.message);
-      setTimeout(() => setUploadStatus(null), 5000);
-      return;
-    }
+    setShowUploadMenu(false);
 
-    setUploadFileName(file.name);
-    setUploadStatus('uploading');
-    setUploadProgress(0);
-    setUploadWarning(check.message);
-
-    const trackId = Date.now().toString();
     let targetPath = '';
     if (folderName.trim()) {
       targetPath = currentFolder && !folderName.includes('/') ? `${currentFolder}/${folderName.trim()}` : folderName.trim();
@@ -132,38 +135,73 @@ export const Music = () => {
       targetPath = currentFolder || 'General';
     }
 
-    try {
-      const { promise } = uploadFile(file, 'audio', trackId, setUploadProgress);
-      const { url, storagePath } = await promise;
+    const total = files.length;
+    let done = 0;
+    let failed = 0;
 
-      const trackData: any = {
-        title: file.name.replace(/\.[^/.]+$/, ''),
-        artist: 'Artista Local',
-        folder: targetPath,
-        coverUrl: '',
-        src: url,
-        storagePath,
-        duration: 0,
-        type: 'audio',
-        fileSize: file.size,
-        addedAt: Date.now(),
-        addedBy: user.uid,
-      };
-      if (shareWith.length > 0) trackData.sharedWith = shareWith;
-      await addTrackToFirestore(trackData);
+    setMultiUpload({ total, done: 0, current: files[0].name });
 
-      setUploadStatus('success');
-      setShareWith([]);
-      await refreshStorageUsage();
-      setTimeout(() => setUploadStatus(null), 3000);
-    } catch (err) {
-      console.error('Upload error:', err);
-      setUploadStatus('error');
-      setTimeout(() => setUploadStatus(null), 5000);
+    for (const file of files) {
+      // Check storage limits
+      const check = await canUpload(file.size);
+      if (!check.allowed) {
+        failed++;
+        done++;
+        setMultiUpload({ total, done, current: file.name });
+        continue;
+      }
+
+      setUploadFileName(file.name);
+      setUploadStatus('uploading');
+      setUploadProgress(0);
+      setMultiUpload({ total, done, current: file.name });
+
+      const trackId = Date.now().toString() + Math.random().toString(36).slice(2, 6);
+
+      try {
+        const { promise } = uploadFile(file, 'audio', trackId, setUploadProgress);
+        const { url, storagePath } = await promise;
+
+        const trackData: any = {
+          title: file.name.replace(/\.[^/.]+$/, ''),
+          artist: 'Artista Local',
+          folder: targetPath,
+          coverUrl: '',
+          src: url,
+          storagePath,
+          duration: 0,
+          type: 'audio',
+          fileSize: file.size,
+          addedAt: Date.now(),
+          addedBy: user.uid,
+        };
+        if (shareWith.length > 0) trackData.sharedWith = shareWith;
+        await addTrackToFirestore(trackData);
+        done++;
+      } catch (err) {
+        console.error('Upload error:', file.name, err);
+        failed++;
+        done++;
+      }
+
+      setMultiUpload({ total, done, current: '' });
     }
 
-    setShowUploadMenu(false);
+    // Finished all
+    setShareWith([]);
     setFolderName('');
+    await refreshStorageUsage();
+
+    if (failed === 0) {
+      setUploadStatus('success');
+      setUploadFileName(`${total} cancion${total !== 1 ? 'es' : ''} subida${total !== 1 ? 's' : ''}`);
+    } else {
+      setUploadStatus('error');
+      setUploadFileName(`${done - failed} subidas, ${failed} fallida${failed !== 1 ? 's' : ''}`);
+    }
+
+    setMultiUpload(null);
+    setTimeout(() => setUploadStatus(null), 4000);
     e.target.value = '';
   };
 
@@ -241,6 +279,24 @@ export const Music = () => {
       {/* Upload progress toast */}
       {uploadStatus && (
         <UploadProgress progress={uploadProgress} fileName={uploadFileName} status={uploadStatus} storageWarning={uploadWarning} />
+      )}
+
+      {/* Multi-upload global progress */}
+      {multiUpload && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[200] w-[320px] max-w-[calc(100vw-32px)] bg-[#161b22]/95 border border-gold-500/30 rounded-xl p-4 shadow-2xl backdrop-blur-xl"
+          style={{ animation: 'nSlide 0.3s ease-out' }}>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-bold text-white">Subiendo archivos</p>
+            <p className="text-xs text-gold-400 font-mono">{multiUpload.done}/{multiUpload.total}</p>
+          </div>
+          <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden mb-2">
+            <div className="h-full bg-gradient-to-r from-gold-400 to-gold-600 transition-all duration-300 rounded-full"
+              style={{ width: `${(multiUpload.done / multiUpload.total) * 100}%` }} />
+          </div>
+          {multiUpload.current && (
+            <p className="text-[10px] text-gray-400 truncate">{multiUpload.current}</p>
+          )}
+        </div>
       )}
 
       {/* Modals */}
@@ -363,10 +419,10 @@ export const Music = () => {
 
         {isAdmin && (
           <div className="relative w-full sm:w-auto" onClick={(e) => e.stopPropagation()}>
-            <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="audio/*" className="hidden" />
+            <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="audio/*" multiple className="hidden" />
             <button onClick={() => setShowUploadMenu(!showUploadMenu)}
               className="w-full sm:w-auto bg-elegant-black border border-gold-500/50 text-gold-100 px-4 py-2 rounded-xl flex items-center justify-center gap-2 shadow-lg text-sm">
-              <Upload size={16} /> <span>Subir Canción</span>
+              <Upload size={16} /> <span>Subir Canciones</span>
             </button>
             {showUploadMenu && (
               <div className="absolute top-full right-0 left-0 sm:left-auto mt-3 w-full sm:w-80 bg-gray-900/95 border border-gold-200 rounded-2xl shadow-2xl p-5 animate-fade-in flex flex-col gap-4 z-50">
@@ -591,13 +647,19 @@ export const Music = () => {
                         <span>·</span>
                         <span>{addedDate}</span>
                       </div>
-                      {isAdmin && !showUploadMenu && (
-                        <div className="flex items-center gap-0.5">
-                          <button onClick={() => setMovingTrack(track)} className="p-1 text-blue-400 hover:bg-blue-500/20 rounded"><FolderInput size={13} /></button>
-                          <button onClick={() => setEditingTrack({ id: track.id, title: track.title, artist: track.artist })} className="p-1 text-gray-400 hover:bg-white/20 rounded"><Edit2 size={13} /></button>
-                          <button onClick={() => removeTrackToTrash(track)} className="p-1 text-red-400 hover:bg-red-500/20 rounded"><Trash2 size={13} /></button>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-0.5">
+                        <button onClick={(e) => handleToggleFav(track.id, e)}
+                          className={'p-1 rounded active:scale-90 transition-transform ' + (favIds.has(track.id) ? 'text-red-400' : 'text-gray-600 hover:text-red-400')}>
+                          <Heart size={13} fill={favIds.has(track.id) ? 'currentColor' : 'none'} />
+                        </button>
+                        {isAdmin && !showUploadMenu && (
+                          <>
+                            <button onClick={() => setMovingTrack(track)} className="p-1 text-blue-400 hover:bg-blue-500/20 rounded"><FolderInput size={13} /></button>
+                            <button onClick={() => setEditingTrack({ id: track.id, title: track.title, artist: track.artist })} className="p-1 text-gray-400 hover:bg-white/20 rounded"><Edit2 size={13} /></button>
+                            <button onClick={() => removeTrackToTrash(track)} className="p-1 text-red-400 hover:bg-red-500/20 rounded"><Trash2 size={13} /></button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>

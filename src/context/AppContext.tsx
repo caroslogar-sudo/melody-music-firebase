@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { User as FirebaseUser } from 'firebase/auth';
 import { AppUser, Track, UserRole, Playlist, UserGroup, StorageUsage, STORAGE_LIMITS } from '../types';
 import {
@@ -19,6 +19,7 @@ import {
 } from '../services/groupService';
 import { setUserOnline } from '../services/chatService';
 import { startSession, endSession, heartbeatSession } from '../services/sessionService';
+import { addToHistory } from '../services/historyService';
 import { getStorageUsage } from '../services/storageService';
 
 export type RepeatMode = 'off' | 'all' | 'one';
@@ -108,19 +109,34 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [shuffle, setShuffle] = useState(false);
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('off');
   const [shuffledQueue, setShuffledQueue] = useState<number[]>([]);
-  const [shuffledPos, setShuffledPos] = useState(-1);
+  const [shuffledPos, setShuffledPos] = useState(0);
 
   const [theme, setTheme] = useState<'glass' | 'dark' | 'light'>('glass');
 
+  // Refs for stable access in callbacks
+  const queueRef = useRef(queue);
+  const queueIndexRef = useRef(queueIndex);
+  const shuffleRef = useRef(shuffle);
+  const repeatModeRef = useRef(repeatMode);
+  const shuffledQueueRef = useRef(shuffledQueue);
+  const shuffledPosRef = useRef(0);
+
+  useEffect(() => { queueRef.current = queue; }, [queue]);
+  useEffect(() => { queueIndexRef.current = queueIndex; }, [queueIndex]);
+  useEffect(() => { shuffleRef.current = shuffle; }, [shuffle]);
+  useEffect(() => { repeatModeRef.current = repeatMode; }, [repeatMode]);
+  useEffect(() => { shuffledQueueRef.current = shuffledQueue; }, [shuffledQueue]);
+  useEffect(() => { shuffledPosRef.current = shuffledPos; }, [shuffledPos]);
+
   // Generate shuffled indices
-  const generateShuffledIndices = useCallback((length: number, currentIdx: number): number[] => {
+  const generateShuffledIndices = (length: number, currentIdx: number): number[] => {
     const indices = Array.from({ length }, (_, i) => i).filter(i => i !== currentIdx);
     for (let i = indices.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [indices[i], indices[j]] = [indices[j], indices[i]];
     }
     return [currentIdx, ...indices];
-  }, []);
+  };
 
   // Auth
   useEffect(() => {
@@ -138,6 +154,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   useEffect(() => {
     if (!user) return;
+    const uid = user.uid;
     const unsubs: (() => void)[] = [];
     unsubs.push(subscribeToLibrary(setLibrary));
     unsubs.push(subscribeToTrash((trashTracks) => {
@@ -150,29 +167,45 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     getStorageUsage().then(setStorageUsage).catch(console.error);
 
     // Set online status
-    setUserOnline(user.uid, true).catch(() => {});
-    const handleBeforeUnload = () => { setUserOnline(user.uid, false); };
-    window.addEventListener('beforeunload', handleBeforeUnload);
+    setUserOnline(uid, true).catch(() => {});
 
     // Session tracking
-    let sessionId = '';
-    startSession(user.uid).then(id => { sessionId = id; }).catch(() => {});
-    const heartbeatInterval = setInterval(() => {
-      if (sessionId) heartbeatSession(sessionId).catch(() => {});
-    }, 60000); // every 60 seconds
+    let currentSessionId = '';
+    let cancelled = false;
+    startSession(uid).then(id => {
+      if (!cancelled) {
+        currentSessionId = id;
+        console.log('[Session] Started:', id, 'for', uid);
+      }
+    }).catch(err => console.warn('[Session] Start failed:', err));
 
-    const handleSessionEnd = () => { if (sessionId) endSession(sessionId); };
-    window.addEventListener('beforeunload', handleSessionEnd);
+    const heartbeatInterval = setInterval(() => {
+      if (currentSessionId) {
+        heartbeatSession(currentSessionId).catch(() => {});
+      }
+    }, 60000);
+
+    const handleBeforeUnload = () => {
+      setUserOnline(uid, false);
+      if (currentSessionId) {
+        endSession(currentSessionId);
+        console.log('[Session] Ended on unload:', currentSessionId);
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
+      cancelled = true;
       unsubs.forEach((fn) => fn());
-      setUserOnline(user.uid, false).catch(() => {});
-      handleSessionEnd();
+      setUserOnline(uid, false).catch(() => {});
+      if (currentSessionId) {
+        endSession(currentSessionId).catch(() => {});
+        console.log('[Session] Ended on cleanup:', currentSessionId);
+      }
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      window.removeEventListener('beforeunload', handleSessionEnd);
       clearInterval(heartbeatInterval);
     };
-  }, [user]);
+  }, [user?.uid]);
 
   const login = async (email: string, password: string) => {
     setLoginError('');
@@ -213,6 +246,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       lastPlayedBy: user?.uid || '',
       lastPlayedAt: Date.now(),
     }).catch(() => {});
+    // Add to personal history
+    if (user?.uid) addToHistory(user.uid, track.id).catch(() => {});
   };
 
   // Play a list of tracks starting from startIndex
@@ -235,6 +270,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         lastPlayedBy: user?.uid || '',
         lastPlayedAt: Date.now(),
       }).catch(() => {});
+      // Add to personal history
+      if (user?.uid) addToHistory(user.uid, t.id).catch(() => {});
     }
   };
 
@@ -246,70 +283,89 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setIsPlaying(false); setCurrentTrack(null); setQueue([]); setQueueIndex(-1);
   };
 
-  const getNextIndex = useCallback((): number | null => {
-    if (queue.length === 0) return null;
-
-    if (shuffle) {
-      const nextPos = shuffledPos + 1;
-      if (nextPos < shuffledQueue.length) return shuffledQueue[nextPos];
-      if (repeatMode === 'all') return shuffledQueue[0];
-      return null;
-    }
-
-    const nextIdx = queueIndex + 1;
-    if (nextIdx < queue.length) return nextIdx;
-    if (repeatMode === 'all') return 0;
-    return null;
-  }, [queue, queueIndex, shuffle, shuffledQueue, shuffledPos, repeatMode]);
-
-  const getPrevIndex = useCallback((): number | null => {
-    if (queue.length === 0) return null;
-
-    if (shuffle) {
-      const prevPos = shuffledPos - 1;
-      if (prevPos >= 0) return shuffledQueue[prevPos];
-      if (repeatMode === 'all') return shuffledQueue[shuffledQueue.length - 1];
-      return null;
-    }
-
-    const prevIdx = queueIndex - 1;
-    if (prevIdx >= 0) return prevIdx;
-    if (repeatMode === 'all') return queue.length - 1;
-    return null;
-  }, [queue, queueIndex, shuffle, shuffledQueue, shuffledPos, repeatMode]);
-
   const nextTrack = useCallback(() => {
-    const nextIdx = getNextIndex();
-    if (nextIdx !== null && queue[nextIdx]) {
-      setQueueIndex(nextIdx);
-      setCurrentTrack(queue[nextIdx]);
-      setIsPlaying(true);
-      if (shuffle) setShuffledPos((p) => (p + 1) % shuffledQueue.length);
+    const q = queueRef.current;
+    const idx = queueIndexRef.current;
+    const isShuffle = shuffleRef.current;
+    const repeat = repeatModeRef.current;
+    const sq = shuffledQueueRef.current;
+    const sp = shuffledPosRef.current;
+
+    if (q.length === 0) return;
+
+    let nextIdx: number | null = null;
+
+    if (isShuffle && sq.length > 0) {
+      const nextPos = sp + 1;
+      if (nextPos < sq.length) {
+        nextIdx = sq[nextPos];
+        setShuffledPos(nextPos);
+      } else if (repeat === 'all') {
+        nextIdx = sq[0];
+        setShuffledPos(0);
+      }
     } else {
-      // End of queue, no repeat
+      const ni = idx + 1;
+      if (ni < q.length) nextIdx = ni;
+      else if (repeat === 'all') nextIdx = 0;
+    }
+
+    if (nextIdx !== null && q[nextIdx]) {
+      setQueueIndex(nextIdx);
+      setCurrentTrack(q[nextIdx]);
+      setIsPlaying(true);
+      const t = q[nextIdx];
+      updateTrackInFirestore(t.id, { playCount: (t.playCount || 0) + 1, lastPlayedBy: user?.uid || '', lastPlayedAt: Date.now() }).catch(() => {});
+      if (user?.uid) addToHistory(user.uid, t.id).catch(() => {});
+    } else {
       setIsPlaying(false);
     }
-  }, [getNextIndex, queue, shuffle, shuffledQueue]);
+  }, [user?.uid]);
 
   const prevTrack = useCallback(() => {
-    const prevIdx = getPrevIndex();
-    if (prevIdx !== null && queue[prevIdx]) {
-      setQueueIndex(prevIdx);
-      setCurrentTrack(queue[prevIdx]);
-      setIsPlaying(true);
-      if (shuffle) setShuffledPos((p) => Math.max(0, p - 1));
-    }
-  }, [getPrevIndex, queue, shuffle]);
+    const q = queueRef.current;
+    const idx = queueIndexRef.current;
+    const isShuffle = shuffleRef.current;
+    const repeat = repeatModeRef.current;
+    const sq = shuffledQueueRef.current;
+    const sp = shuffledPosRef.current;
 
-  // Called when audio element fires 'ended'
-  const onTrackEnded = useCallback(() => {
-    if (repeatMode === 'one') {
-      // Repeat same track - player will handle restarting
+    if (q.length === 0) return;
+
+    let prevIdx: number | null = null;
+
+    if (isShuffle && sq.length > 0) {
+      const prevPos = sp - 1;
+      if (prevPos >= 0) {
+        prevIdx = sq[prevPos];
+        setShuffledPos(prevPos);
+      } else if (repeat === 'all') {
+        prevIdx = sq[sq.length - 1];
+        setShuffledPos(sq.length - 1);
+      }
+    } else {
+      const pi = idx - 1;
+      if (pi >= 0) prevIdx = pi;
+      else if (repeat === 'all') prevIdx = q.length - 1;
+    }
+
+    if (prevIdx !== null && q[prevIdx]) {
+      setQueueIndex(prevIdx);
+      setCurrentTrack(q[prevIdx]);
       setIsPlaying(true);
+      const t = q[prevIdx];
+      updateTrackInFirestore(t.id, { playCount: (t.playCount || 0) + 1, lastPlayedBy: user?.uid || '', lastPlayedAt: Date.now() }).catch(() => {});
+      if (user?.uid) addToHistory(user.uid, t.id).catch(() => {});
+    }
+  }, [user?.uid]);
+
+  const onTrackEnded = useCallback(() => {
+    if (repeatModeRef.current === 'one') {
+      setIsPlaying(true); // PlayerBar handles actual restart via el.currentTime = 0
       return;
     }
     nextTrack();
-  }, [repeatMode, nextTrack]);
+  }, [nextTrack]);
 
   const toggleShuffle = () => {
     setShuffle((prev) => {

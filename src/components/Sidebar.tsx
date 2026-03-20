@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Music, Video, ListMusic, Trash2, Settings, LogOut, Users, Crown, ShieldCheck, Share2, MessageCircle, Mail, UserCheck, Inbox, UserPlus, Camera, Loader2, BarChart3 } from 'lucide-react';
+import { Home, Music, Video, ListMusic, Trash2, Settings, LogOut, Users, Crown, ShieldCheck, Share2, MessageCircle, Mail, UserCheck, Inbox, UserPlus, Camera, Loader2, BarChart3, Clock, Heart } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { GlassCard } from './ui/GlassCard';
 import { StorageMonitor } from './ui/StorageMonitor';
@@ -95,6 +95,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
       { icon: Music, label: 'Música', path: '/music', show: true },
       { icon: Video, label: 'Videos', path: '/videos', show: true },
       { icon: ListMusic, label: 'Listas', path: '/playlists', show: true },
+      { icon: Heart, label: 'Favoritos', path: '/favorites', show: true },
+      { icon: Clock, label: 'Historial', path: '/history', show: true },
       { icon: Share2, label: 'Compartidas', path: '/shared', show: true },
       { icon: UserCheck, label: 'Mis Grupos', path: '/my-groups', show: true },
       { icon: MessageCircle, label: 'Chat', path: '/chat', show: true, badge: unreadChat },

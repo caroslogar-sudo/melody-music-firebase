@@ -16,6 +16,8 @@ import { MyGroups } from './pages/MyGroups';
 import { Chat } from './pages/Chat';
 import { Mail } from './pages/Mail';
 import { Requests } from './pages/Requests';
+import { History } from './pages/History';
+import { Favorites } from './pages/Favorites';
 import { Register } from './pages/Register';
 import { Invites } from './pages/Invites';
 import { Analytics } from './pages/Analytics';
@@ -63,6 +65,8 @@ const AppRoutes = () => {
       <Route path="/music" element={<RequireAuth><Music /></RequireAuth>} />
       <Route path="/videos" element={<RequireAuth><Videos /></RequireAuth>} />
       <Route path="/playlists" element={<RequireAuth><Playlists /></RequireAuth>} />
+      <Route path="/history" element={<RequireAuth><History /></RequireAuth>} />
+      <Route path="/favorites" element={<RequireAuth><Favorites /></RequireAuth>} />
       <Route path="/shared" element={<RequireAuth><Shared /></RequireAuth>} />
       <Route path="/my-groups" element={<RequireAuth><MyGroups /></RequireAuth>} />
       <Route path="/chat" element={<RequireAuth><Chat /></RequireAuth>} />

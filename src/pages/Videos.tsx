@@ -80,6 +80,8 @@ export const Videos = () => {
   const [uploadStatus, setUploadStatus] = useState<'uploading' | 'success' | 'error' | null>(null);
   const [uploadFileName, setUploadFileName] = useState('');
   const [uploadWarning, setUploadWarning] = useState('');
+  const [uploadTotal, setUploadTotal] = useState(0);
+  const [uploadCurrent, setUploadCurrent] = useState(0);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState('');
   const [shareWith, setShareWith] = useState<string[]>([]);
@@ -156,22 +158,53 @@ export const Videos = () => {
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f || !user) return;
-    const check = await canUpload(f.size);
-    if (!check.allowed) { setUploadStatus('error'); setUploadFileName(f.name); setUploadWarning(check.message); setTimeout(() => setUploadStatus(null), 5000); return; }
-    setUploadFileName(f.name); setUploadStatus('uploading'); setUploadProgress(0); setUploadWarning(check.message);
-    const trackId = Date.now().toString();
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0 || !user) return;
+
+    const files = Array.from(fileList);
     let targetPath = folderName.trim() ? (currentFolder && !folderName.includes('/') ? `${currentFolder}/${folderName.trim()}` : folderName.trim()) : (currentFolder || 'General');
-    try {
-      const { promise } = uploadFile(f, 'video', trackId, setUploadProgress);
-      const { url, storagePath } = await promise;
-      const trackData: any = { title: f.name.replace(/\.[^/.]+$/, ''), artist: 'Video Local', folder: targetPath, coverUrl: '', src: url, storagePath, duration: 0, type: 'video', fileSize: f.size, addedAt: Date.now(), addedBy: user.uid };
-      if (shareWith.length > 0) trackData.sharedWith = shareWith;
-      await addTrackToFirestore(trackData);
-      setUploadStatus('success'); setShareWith([]); await refreshStorageUsage(); setTimeout(() => setUploadStatus(null), 3000);
-    } catch { setUploadStatus('error'); setTimeout(() => setUploadStatus(null), 5000); }
-    setShowUploadMenu(false); setFolderName(''); e.target.value = '';
+
+    setShowUploadMenu(false);
+    setFolderName('');
+    setUploadTotal(files.length);
+    setUploadCurrent(0);
+    setUploadStatus('uploading');
+    setUploadWarning('');
+
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      setUploadCurrent(i + 1);
+      setUploadFileName(f.name);
+      setUploadProgress(0);
+
+      const check = await canUpload(f.size);
+      if (!check.allowed) { errorCount++; setUploadWarning(check.message); continue; }
+
+      const trackId = Date.now().toString() + '_' + i;
+      try {
+        const { promise } = uploadFile(f, 'video', trackId, (p) => setUploadProgress(p));
+        const { url, storagePath } = await promise;
+        const trackData: any = { title: f.name.replace(/\.[^/.]+$/, ''), artist: 'Video Local', folder: targetPath, coverUrl: '', src: url, storagePath, duration: 0, type: 'video', fileSize: f.size, addedAt: Date.now() + i, addedBy: user.uid };
+        if (shareWith.length > 0) trackData.sharedWith = shareWith;
+        await addTrackToFirestore(trackData);
+        successCount++;
+      } catch (err) { console.error('Upload error:', f.name, err); errorCount++; }
+    }
+
+    setShareWith([]);
+    await refreshStorageUsage();
+    if (errorCount === 0) {
+      setUploadStatus('success');
+      setUploadFileName(`${successCount} video${successCount !== 1 ? 's' : ''} subido${successCount !== 1 ? 's' : ''}`);
+    } else {
+      setUploadStatus('error');
+      setUploadFileName(`${successCount} subido${successCount !== 1 ? 's' : ''}, ${errorCount} error${errorCount !== 1 ? 'es' : ''}`);
+    }
+    setTimeout(() => { setUploadStatus(null); setUploadTotal(0); setUploadCurrent(0); }, 4000);
+    e.target.value = '';
   };
 
   const handleCreateFolder = async () => {
@@ -190,7 +223,40 @@ export const Videos = () => {
 
   return (
     <div className="flex flex-col gap-6 h-full relative" onClick={() => showUploadMenu && setShowUploadMenu(false)}>
-      {uploadStatus && <UploadProgress progress={uploadProgress} fileName={uploadFileName} status={uploadStatus} storageWarning={uploadWarning} />}
+      {uploadStatus && (
+        <div className="fixed top-2 left-1/2 -translate-x-1/2 z-[200] w-[90%] max-w-md">
+          <div className={'rounded-xl p-3 shadow-2xl border backdrop-blur-xl ' + (
+            uploadStatus === 'uploading' ? 'bg-[#0d1525]/95 border-blue-500/30' :
+            uploadStatus === 'success' ? 'bg-[#0d1a15]/95 border-green-500/30' :
+            'bg-[#1a0d0d]/95 border-red-500/30'
+          )}>
+            <div className="flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-white truncate">{uploadFileName}</p>
+                {uploadStatus === 'uploading' && uploadTotal > 1 && (
+                  <p className="text-[10px] text-gray-400 mt-0.5">Archivo {uploadCurrent} de {uploadTotal}</p>
+                )}
+                {uploadWarning && <p className="text-[10px] text-yellow-400 mt-0.5">{uploadWarning}</p>}
+              </div>
+              <span className={'text-xs font-bold ' + (
+                uploadStatus === 'uploading' ? 'text-blue-400' : uploadStatus === 'success' ? 'text-green-400' : 'text-red-400'
+              )}>
+                {uploadStatus === 'uploading' ? `${uploadProgress}%` : uploadStatus === 'success' ? 'OK' : 'Error'}
+              </span>
+            </div>
+            {uploadStatus === 'uploading' && (
+              <div className="mt-2 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                <div className="h-full bg-blue-500 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }} />
+              </div>
+            )}
+            {uploadStatus === 'uploading' && uploadTotal > 1 && (
+              <div className="mt-1 h-1 bg-gray-800 rounded-full overflow-hidden">
+                <div className="h-full bg-gold-500/60 rounded-full transition-all duration-300" style={{ width: `${(uploadCurrent / uploadTotal) * 100}%` }} />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Video Player Modal */}
       {viewingVideo && (
@@ -301,7 +367,7 @@ export const Videos = () => {
         </div>
         {isAdmin && (
           <div className="relative w-full sm:w-auto" onClick={(e) => e.stopPropagation()}>
-            <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="video/*" className="hidden" />
+            <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="video/*" multiple className="hidden" />
             <button onClick={() => setShowUploadMenu(!showUploadMenu)} className="w-full sm:w-auto bg-elegant-black border border-gold-500/50 text-gold-100 px-4 py-2 rounded-xl flex items-center justify-center gap-2 shadow-lg text-sm"><Upload size={16} /><span>Subir Video</span></button>
             {showUploadMenu && (
               <div className="absolute top-full right-0 left-0 sm:left-auto mt-3 w-full sm:w-80 bg-gray-900/95 border border-gold-200 rounded-2xl shadow-2xl p-5 animate-fade-in flex flex-col gap-4 z-50">

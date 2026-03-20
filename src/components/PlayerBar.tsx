@@ -1,19 +1,76 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
-import { Play, Pause, SkipBack, SkipForward, Volume2, X, Maximize2, Minimize2, Shuffle, Repeat, Repeat1 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Volume2, X, Maximize2, Minimize2, Shuffle, Repeat, Repeat1, Heart, Moon } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { GlassCard } from './ui/GlassCard';
 import { useCovers, getCoverFallback } from '../hooks/useCovers';
+import { subscribeFavorites, toggleFavorite } from '../services/favoritesService';
 
 export const PlayerBar = () => {
   const {
     currentTrack, isPlaying, togglePlay, closePlayer, volume, setVolume,
     nextTrack, prevTrack, shuffle, toggleShuffle, repeatMode, toggleRepeat,
-    onTrackEnded, queue,
+    onTrackEnded, queue, user,
   } = useApp();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isMinimized, setIsMinimized] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isFav, setIsFav] = useState(false);
+  const [sleepMinutes, setSleepMinutes] = useState(0); // 0 = off
+  const [sleepRemaining, setSleepRemaining] = useState(0); // seconds remaining
+  const [showSleepMenu, setShowSleepMenu] = useState(false);
+  const sleepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Sleep timer countdown
+  useEffect(() => {
+    if (sleepRemaining <= 0) {
+      if (sleepIntervalRef.current) { clearInterval(sleepIntervalRef.current); sleepIntervalRef.current = null; }
+      return;
+    }
+    sleepIntervalRef.current = setInterval(() => {
+      setSleepRemaining(prev => {
+        if (prev <= 1) {
+          // Time's up - pause music
+          togglePlay();
+          setSleepMinutes(0);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => { if (sleepIntervalRef.current) clearInterval(sleepIntervalRef.current); };
+  }, [sleepRemaining > 0]);
+
+  const startSleepTimer = (minutes: number) => {
+    setSleepMinutes(minutes);
+    setSleepRemaining(minutes * 60);
+    setShowSleepMenu(false);
+  };
+
+  const cancelSleepTimer = () => {
+    setSleepMinutes(0);
+    setSleepRemaining(0);
+    setShowSleepMenu(false);
+  };
+
+  const formatSleepRemaining = () => {
+    const m = Math.floor(sleepRemaining / 60);
+    const s = sleepRemaining % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+
+  // Subscribe to favorites
+  useEffect(() => {
+    if (!user) return;
+    const unsub = subscribeFavorites(user.uid, (ids) => {
+      setIsFav(currentTrack ? ids.includes(currentTrack.id) : false);
+    });
+    return () => unsub();
+  }, [user?.uid, currentTrack?.id]);
+
+  const handleToggleFav = () => {
+    if (user && currentTrack) toggleFavorite(user.uid, currentTrack.id);
+  };
 
   const trackArray = useMemo(() => currentTrack ? [currentTrack] : [], [currentTrack]);
   const covers = useCovers(trackArray);
@@ -196,10 +253,16 @@ export const PlayerBar = () => {
             <img src={coverUrl || coverFallback} alt="" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).src = coverFallback; }} />
           </div>
 
-          {/* Title / Artist */}
-          <div className="flex-1 min-w-0">
-            <h4 className="font-bold text-elegant-black truncate text-sm md:text-base">{currentTrack.title}</h4>
-            <p className="text-xs text-elegant-gray truncate">{currentTrack.artist}</p>
+          {/* Title / Artist + Fav */}
+          <div className="flex-1 min-w-0 flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <h4 className="font-bold text-elegant-black truncate text-sm md:text-base">{currentTrack.title}</h4>
+              <p className="text-xs text-elegant-gray truncate">{currentTrack.artist}</p>
+            </div>
+            <button onClick={handleToggleFav}
+              className={'p-1.5 rounded-full active:scale-90 transition-all flex-shrink-0 ' + (isFav ? 'text-red-500' : 'text-gray-400 hover:text-red-400')}>
+              <Heart size={16} fill={isFav ? 'currentColor' : 'none'} />
+            </button>
           </div>
 
           {/* Volume - hidden on mobile */}
@@ -240,6 +303,33 @@ export const PlayerBar = () => {
               <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-gold-500 rounded-full text-[7px] text-white flex items-center justify-center font-bold">∞</span>
             )}
           </button>
+          <div className="relative">
+            <button onClick={() => setShowSleepMenu(!showSleepMenu)}
+              className={`p-1.5 rounded-full transition-colors relative ${sleepMinutes > 0 ? 'text-indigo-400 bg-indigo-500/10' : 'text-gray-400 hover:text-elegant-black'}`}>
+              <Moon size={15} />
+              {sleepRemaining > 0 && (
+                <span className="absolute -top-1 -right-2 text-[8px] text-indigo-400 font-bold whitespace-nowrap">{formatSleepRemaining()}</span>
+              )}
+            </button>
+            {showSleepMenu && (
+              <div className="absolute bottom-full right-0 mb-2 bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl backdrop-blur-xl p-2 min-w-[140px] z-[100]"
+                onClick={(e) => e.stopPropagation()}>
+                <p className="text-[9px] uppercase font-bold text-gray-500 px-2 mb-1 tracking-wider">Temporizador</p>
+                {[5, 10, 15, 30, 45, 60, 90].map(m => (
+                  <button key={m} onClick={() => startSleepTimer(m)}
+                    className={'w-full text-left px-3 py-1.5 text-xs rounded-lg transition-colors ' + (sleepMinutes === m ? 'bg-indigo-500/20 text-indigo-300 font-bold' : 'text-gray-300 hover:bg-white/10')}>
+                    {m} min
+                  </button>
+                ))}
+                {sleepMinutes > 0 && (
+                  <button onClick={cancelSleepTimer}
+                    className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10 rounded-lg mt-1 border-t border-white/10 pt-2">
+                    Cancelar
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Row 2: Progress bar */}
