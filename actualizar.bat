@@ -6,7 +6,7 @@ echo ===========================================
 echo.
 
 :: 1. Pedir el mensaje de la actualizacion
-set /p msg="¿Que has cambiado hoy? (En esta subida instalacion web y movil, y funcionamiento local sin internet): "
+set /p msg="¿Que has cambiado hoy? (Explica que cambios y acepta): "
 
 :: 2. Preparar los archivos
 echo.

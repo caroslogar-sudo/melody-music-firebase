@@ -108,3 +108,93 @@ export const searchYouTubeVideos = async (query: string): Promise<any[]> => {
     return [];
   }
 }
+
+// Clean up file-based titles: remove extensions, underscores, brackets, quality tags etc.
+const cleanTitle = (raw: string): string => {
+  let t = raw;
+  // Remove file extension
+  t = t.replace(/\.[^/.]+$/, '');
+  // Replace underscores and dashes with spaces
+  t = t.replace(/[_]/g, ' ').replace(/\s*-\s*/g, ' - ');
+  // Remove common tags in brackets/parentheses
+  t = t.replace(/[\(\[].*?(remix|edit|version|cover|official|video|audio|lyric|hd|hq|320|128|mp3|flac|wav).*?[\)\]]/gi, '');
+  // Remove leading track numbers like "01 " or "01. "
+  t = t.replace(/^\d{1,3}[\.\-\s]+/, '');
+  // Remove extra spaces
+  t = t.replace(/\s+/g, ' ').trim();
+  return t;
+};
+
+// Try to split "Artist - Title" format common in filenames
+const parseArtistTitle = (artist: string, title: string): { artist: string; title: string } => {
+  const cleanedTitle = cleanTitle(title);
+  const cleanedArtist = cleanTitle(artist);
+
+  // If title contains " - ", it likely has artist and title together
+  if (cleanedTitle.includes(' - ')) {
+    const parts = cleanedTitle.split(' - ');
+    if (parts.length === 2) {
+      return { artist: parts[0].trim(), title: parts[1].trim() };
+    }
+  }
+
+  // If artist is generic like "Artista Local" or "Unknown", try to extract from title
+  if (/artista|local|unknown|desconocido/i.test(cleanedArtist) && cleanedTitle.includes(' - ')) {
+    const parts = cleanedTitle.split(' - ');
+    return { artist: parts[0].trim(), title: parts.slice(1).join(' - ').trim() };
+  }
+
+  return { artist: cleanedArtist, title: cleanedTitle };
+};
+
+export const getLyrics = async (rawArtist: string, rawTitle: string): Promise<string> => {
+  const { artist, title } = parseArtistTitle(rawArtist, rawTitle);
+  console.log(`[Lyrics] Searching for: "${title}" by "${artist}"`);
+
+  // Step 1: Try lyrics.ovh API
+  try {
+    const res = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.lyrics && data.lyrics.trim().length > 50) {
+        console.log('[Lyrics] Found via lyrics.ovh');
+        return `${title} — ${artist}\n\n${data.lyrics.trim()}`;
+      }
+    }
+  } catch {}
+
+  // Step 2: Try with simplified artist name (remove "feat.", "ft.", "y", "&" etc.)
+  const simpleArtist = artist.split(/\s+(?:feat\.?|ft\.?|y|&|x)\s+/i)[0].trim();
+  if (simpleArtist !== artist) {
+    try {
+      const res = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(simpleArtist)}/${encodeURIComponent(title)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.lyrics && data.lyrics.trim().length > 50) {
+          console.log('[Lyrics] Found via lyrics.ovh (simplified artist)');
+          return `${title} — ${artist}\n\n${data.lyrics.trim()}`;
+        }
+      }
+    } catch {}
+  }
+
+  // Step 3: Try swapping artist/title (some files have them reversed)
+  try {
+    const res = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(title)}/${encodeURIComponent(artist)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.lyrics && data.lyrics.trim().length > 50) {
+        console.log('[Lyrics] Found via lyrics.ovh (swapped)');
+        return `${title} — ${artist}\n\n${data.lyrics.trim()}`;
+      }
+    }
+  } catch {}
+
+  // Step 4: Not found — provide direct search links (no Gemini to avoid invented lyrics)
+  console.log('[Lyrics] Not found in any API');
+  const q = encodeURIComponent(`${title} ${artist} letra`);
+  return `No se encontro la letra de "${title}" de ${artist}.\n\nBuscar en:\n\n` +
+    `🔍 Google: https://www.google.com/search?q=${q}\n\n` +
+    `🎵 Genius: https://genius.com/search?q=${encodeURIComponent(`${artist} ${title}`)}\n\n` +
+    `🎶 Musixmatch: https://www.musixmatch.com/search/${encodeURIComponent(`${artist} ${title}`)}`;
+};

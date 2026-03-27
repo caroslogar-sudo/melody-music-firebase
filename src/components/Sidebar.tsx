@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Music, Video, ListMusic, Trash2, Settings, LogOut, Users, Crown, ShieldCheck, Share2, MessageCircle, Mail, UserCheck, Inbox, UserPlus, Camera, Loader2, BarChart3, Clock, Heart } from 'lucide-react';
+import { Home, Music, Video, ListMusic, Trash2, Settings, LogOut, Users, Crown, ShieldCheck, Share2, MessageCircle, Mail, UserCheck, Inbox, UserPlus, Camera, Loader2, BarChart3, Clock, Heart, Radio, Image } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { GlassCard } from './ui/GlassCard';
 import { StorageMonitor } from './ui/StorageMonitor';
@@ -94,6 +94,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
       { icon: Home, label: 'Inicio', path: '/dashboard', show: true },
       { icon: Music, label: 'Música', path: '/music', show: true },
       { icon: Video, label: 'Videos', path: '/videos', show: true },
+      { icon: Radio, label: 'Radio', path: '/radio', show: true },
+      { icon: Camera, label: 'Camara', path: '/camera', show: true },
+      { icon: Image, label: 'Fotos', path: '/photos', show: true },
       { icon: ListMusic, label: 'Listas', path: '/playlists', show: true },
       { icon: Heart, label: 'Favoritos', path: '/favorites', show: true },
       { icon: Clock, label: 'Historial', path: '/history', show: true },

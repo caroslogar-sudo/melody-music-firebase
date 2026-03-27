@@ -13,72 +13,90 @@ export const SessionGuard: React.FC = () => {
 
   const lastActivityRef = useRef(Date.now());
   const promptVisibleRef = useRef(false);
+  const promptStartRef = useRef(0);
   const logoutRef = useRef(logout);
-  const checkIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => { logoutRef.current = logout; }, [logout]);
   useEffect(() => { promptVisibleRef.current = showPrompt; }, [showPrompt]);
 
-  // Register activity listeners + check interval — runs ONCE per user
+  // Core check - works on wake from sleep too
+  const checkInactivity = () => {
+    if (promptVisibleRef.current) {
+      // Prompt already showing - check if 5min expired (phone may have been sleeping)
+      const elapsed = Math.floor((Date.now() - promptStartRef.current) / 1000);
+      if (elapsed >= COUNTDOWN_TOTAL) {
+        console.log('[SessionGuard] Auto-logout (background expired)');
+        logoutRef.current();
+        return;
+      }
+      setCountdown(Math.max(0, COUNTDOWN_TOTAL - elapsed));
+      return;
+    }
+    const elapsed = Date.now() - lastActivityRef.current;
+    if (elapsed >= INACTIVITY_MS) {
+      console.log('[SessionGuard] Inactivity:', Math.round(elapsed / 60000), 'min');
+      promptStartRef.current = Date.now();
+      setShowPrompt(true);
+      setCountdown(COUNTDOWN_TOTAL);
+    }
+  };
+
   useEffect(() => {
     if (!user) return;
     console.log('[SessionGuard] Started for', user.uid);
 
-    // Update last activity timestamp
     const onActivity = () => {
-      if (!promptVisibleRef.current) {
-        lastActivityRef.current = Date.now();
-      }
+      if (!promptVisibleRef.current) lastActivityRef.current = Date.now();
     };
 
-    // Listen to user interactions
-    const events = ['mousedown', 'keydown', 'touchstart', 'scroll', 'click'];
+    const events = ['mousedown', 'keydown', 'touchstart', 'touchmove', 'scroll', 'click'];
     events.forEach(e => window.addEventListener(e, onActivity, { passive: true }));
 
-    // Check every 30 seconds if 1 hour of inactivity has passed
-    checkIntervalRef.current = setInterval(() => {
-      if (promptVisibleRef.current) return; // Already showing
-      const elapsed = Date.now() - lastActivityRef.current;
-      if (elapsed >= INACTIVITY_MS) {
-        console.log('[SessionGuard] Inactivity detected after', Math.round(elapsed / 60000), 'min');
-        setShowPrompt(true);
-        setCountdown(COUNTDOWN_TOTAL);
+    // Check every 30s while active
+    const interval = setInterval(checkInactivity, 30000);
+
+    // MOBILE FIX: check when app comes back to foreground
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('[SessionGuard] Visible again, checking...');
+        checkInactivity();
       }
-    }, 30000); // Check every 30 seconds
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', checkInactivity);
 
     return () => {
       events.forEach(e => window.removeEventListener(e, onActivity));
-      if (checkIntervalRef.current) clearInterval(checkIntervalRef.current);
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', checkInactivity);
     };
-  }, [user?.uid]); // Only depends on uid - stable
+  }, [user?.uid]);
 
-  // Countdown timer when prompt is visible
+  // Countdown - uses real timestamps, not interval ticks
   useEffect(() => {
-    if (!showPrompt) {
-      if (countdownIntervalRef.current) { clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
-      return;
-    }
+    if (!showPrompt) return;
+    promptStartRef.current = Date.now();
 
-    countdownIntervalRef.current = setInterval(() => {
-      setCountdown(prev => {
-        if (prev <= 1) {
-          console.log('[SessionGuard] Auto-logout');
-          if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-          logoutRef.current();
-          return 0;
-        }
-        return prev - 1;
-      });
+    const interval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - promptStartRef.current) / 1000);
+      const remaining = COUNTDOWN_TOTAL - elapsed;
+      if (remaining <= 0) {
+        clearInterval(interval);
+        logoutRef.current();
+        setCountdown(0);
+      } else {
+        setCountdown(remaining);
+      }
     }, 1000);
 
-    return () => { if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current); };
+    return () => clearInterval(interval);
   }, [showPrompt]);
 
   const handleContinue = () => {
     setShowPrompt(false);
     setCountdown(COUNTDOWN_TOTAL);
-    lastActivityRef.current = Date.now(); // Reset activity
+    lastActivityRef.current = Date.now();
   };
 
   const handleLogout = () => {
@@ -96,7 +114,7 @@ export const SessionGuard: React.FC = () => {
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/80 backdrop-blur-xl p-4">
       <div className="w-full max-w-sm bg-[#161b22] border border-white/15 rounded-2xl shadow-2xl overflow-hidden"
-        style={{ animation: 'nSlide 0.3s ease-out' }}>
+        style={{ animation: 'sgFade 0.3s ease-out' }}>
         <div className="h-1.5 bg-gray-800">
           <div className="h-full transition-all duration-1000 ease-linear rounded-full"
             style={{ width: `${pct}%`, backgroundColor: color }} />
@@ -135,7 +153,7 @@ export const SessionGuard: React.FC = () => {
           </div>
         </div>
       </div>
-      <style>{`@keyframes nSlide{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}`}</style>
+      <style>{`@keyframes sgFade{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}`}</style>
     </div>
   );
 };
