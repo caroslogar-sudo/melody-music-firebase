@@ -7,15 +7,16 @@ import { UserRole } from '../types';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../services/firebase';
 import { createUserProfile } from '../services/authService';
-import { uploadFile } from '../services/storageService';
+import { uploadFile, recalculateStorageUsage } from '../services/storageService';
 
 export const Settings = () => {
-  const { user, users, updateUserProfileAction, approveUserAction, rejectUserAction, changeUserRoleAction, refreshUsers } = useApp();
+  const { user, users, updateUserProfileAction, approveUserAction, rejectUserAction, changeUserRoleAction, refreshUsers, refreshStorageUsage } = useApp();
 
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [editName, setEditName] = useState(user?.displayName || '');
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [recalculating, setRecalculating] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   if (user?.role !== UserRole.MASTER) {
@@ -225,6 +226,20 @@ export const Settings = () => {
       <section>
         <h3 className="text-lg font-bold text-white mb-4">Almacenamiento Firebase</h3>
         <StorageMonitor />
+        <button onClick={async () => {
+          setRecalculating(true);
+          await recalculateStorageUsage();
+          await refreshStorageUsage();
+          setRecalculating(false);
+        }}
+          disabled={recalculating}
+          className="mt-3 w-full bg-white/10 border border-white/15 text-gray-300 py-2.5 rounded-xl text-xs font-bold hover:bg-white/15 active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+          {recalculating ? (
+            <><Loader2 size={14} className="animate-spin" /> Recalculando almacenamiento...</>
+          ) : (
+            'Recalcular almacenamiento real'
+          )}
+        </button>
       </section>
 
       {/* Admin */}

@@ -10,11 +10,13 @@ export interface AppUser {
   displayName: string;
   role: UserRole;
   avatarUrl?: string;
+  phone?: string; // WhatsApp number with country code, e.g. "+34612345678"
+  callmebotApiKey?: string; // CallMeBot API key for WhatsApp notifications
   approved: boolean;
   createdAt: number;
   online?: boolean;
   lastSeen?: number;
-  allowedFolders?: string[]; // ['*'] = all, ['Bachata', 'Salsa/Mixes'] = specific folders
+  allowedFolders?: string[];
 }
 
 export interface Track {
@@ -102,6 +104,5 @@ export const STORAGE_LIMITS = {
   TOTAL_BYTES: 5 * 1024 * 1024 * 1024,
   WARN_PERCENT: 80,
   CRITICAL_PERCENT: 95,
-  MAX_FILE_SIZE: 150 * 1024 * 1024,
   DAILY_DOWNLOAD_BYTES: 1 * 1024 * 1024 * 1024,
 };

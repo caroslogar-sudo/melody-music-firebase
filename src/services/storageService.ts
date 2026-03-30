@@ -4,6 +4,7 @@ import {
   getDownloadURL,
   deleteObject,
   UploadTask,
+  getMetadata,
 } from 'firebase/storage';
 import {
   doc,
@@ -11,9 +12,11 @@ import {
   setDoc,
   updateDoc,
   increment,
+  collection,
+  getDocs,
 } from 'firebase/firestore';
 import { storage, db } from './firebase';
-import { StorageUsage, STORAGE_LIMITS } from '../types';
+import { StorageUsage, STORAGE_LIMITS, Track } from '../types';
 
 // Get current storage usage from Firestore
 export const getStorageUsage = async (): Promise<StorageUsage> => {
@@ -35,14 +38,6 @@ export const getStorageUsage = async (): Promise<StorageUsage> => {
 
 // Check if upload would exceed limits
 export const canUpload = async (fileSize: number): Promise<{ allowed: boolean; message: string }> => {
-  if (fileSize > STORAGE_LIMITS.MAX_FILE_SIZE) {
-    const maxMB = Math.round(STORAGE_LIMITS.MAX_FILE_SIZE / (1024 * 1024));
-    return {
-      allowed: false,
-      message: `El archivo excede el limite de ${maxMB} MB por archivo.`,
-    };
-  }
-
   try {
     const usage = await getStorageUsage();
     const newTotal = usage.totalBytes + fileSize;
@@ -137,19 +132,112 @@ export const deleteFile = async (storagePath: string, fileSize: number, type: 'a
   if (!storagePath) return;
   try {
     const storageRef = ref(storage, storagePath);
+
+    // Get REAL file size from Storage metadata (fileSize param is often 0 for old tracks)
+    let realSize = fileSize;
+    try {
+      const metadata = await getMetadata(storageRef);
+      realSize = metadata.size || fileSize;
+      console.log(`[Storage] Deleting ${storagePath} (${realSize} bytes)`);
+    } catch {
+      console.log(`[Storage] Could not get metadata, using provided size: ${fileSize}`);
+    }
+
     await deleteObject(storageRef);
 
-    // Decrease storage usage
-    const docRef = doc(db, 'config', 'storage-usage');
-    const field = type === 'audio' ? 'audioBytes' : type === 'video' ? 'videoBytes' : 'coverBytes';
-    await updateDoc(docRef, {
-      totalBytes: increment(-fileSize),
-      [field]: increment(-fileSize),
-      fileCount: increment(-1),
-      lastUpdated: Date.now(),
-    });
+    // Decrease storage usage with the real size
+    if (realSize > 0) {
+      const docRef = doc(db, 'config', 'storage-usage');
+      const field = type === 'audio' ? 'audioBytes' : type === 'video' ? 'videoBytes' : 'coverBytes';
+      await updateDoc(docRef, {
+        totalBytes: increment(-realSize),
+        [field]: increment(-realSize),
+        fileCount: increment(-1),
+        lastUpdated: Date.now(),
+      });
+    }
   } catch (err) {
     console.error('Error deleting file:', err);
+  }
+};
+
+// Recalculate storage usage by scanning all tracks in Firestore
+// Call this to fix mismatched counters
+export const recalculateStorageUsage = async (): Promise<StorageUsage> => {
+  let audioBytes = 0;
+  let videoBytes = 0;
+  let coverBytes = 0;
+  let fileCount = 0;
+
+  try {
+    // Scan all tracks in library
+    const tracksSnap = await getDocs(collection(db, 'tracks'));
+    for (const d of tracksSnap.docs) {
+      const track = d.data() as Track;
+      let size = track.fileSize || 0;
+
+      // If fileSize is 0, try to get real size from Storage
+      if (size === 0 && track.storagePath) {
+        try {
+          const metadata = await getMetadata(ref(storage, track.storagePath));
+          size = metadata.size || 0;
+          // Update the track document with the real size
+          if (size > 0) {
+            await updateDoc(doc(db, 'tracks', d.id), { fileSize: size });
+          }
+        } catch { /* file might not exist */ }
+      }
+
+      if (track.type === 'audio') audioBytes += size;
+      else if (track.type === 'video') videoBytes += size;
+      fileCount++;
+    }
+
+    // Scan trash too
+    const trashSnap = await getDocs(collection(db, 'trash'));
+    for (const d of trashSnap.docs) {
+      const track = d.data() as Track;
+      let size = track.fileSize || 0;
+
+      if (size === 0 && track.storagePath) {
+        try {
+          const metadata = await getMetadata(ref(storage, track.storagePath));
+          size = metadata.size || 0;
+        } catch {}
+      }
+
+      if (track.type === 'audio') audioBytes += size;
+      else if (track.type === 'video') videoBytes += size;
+      fileCount++;
+    }
+
+    // Scan photos
+    const photosSnap = await getDocs(collection(db, 'photos'));
+    for (const d of photosSnap.docs) {
+      const photo = d.data();
+      let size = 0;
+      if (photo.storagePath) {
+        try {
+          const metadata = await getMetadata(ref(storage, photo.storagePath));
+          size = metadata.size || 0;
+        } catch {}
+      }
+      coverBytes += size;
+      fileCount++;
+    }
+
+    const totalBytes = audioBytes + videoBytes + coverBytes;
+    const usage: StorageUsage = {
+      totalBytes, audioBytes, videoBytes, coverBytes, fileCount, lastUpdated: Date.now(),
+    };
+
+    // Save recalculated values
+    await setDoc(doc(db, 'config', 'storage-usage'), usage);
+    console.log('[Storage] Recalculated:', formatBytes(totalBytes), `(${fileCount} files)`);
+    return usage;
+  } catch (err) {
+    console.error('[Storage] Recalculate error:', err);
+    return { totalBytes: 0, audioBytes: 0, videoBytes: 0, coverBytes: 0, fileCount: 0, lastUpdated: Date.now() };
   }
 };
 

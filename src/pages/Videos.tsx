@@ -4,7 +4,7 @@ import { GlassCard } from '../components/ui/GlassCard';
 import { UploadProgress } from '../components/ui/UploadProgress';
 import { uploadFile, canUpload } from '../services/storageService';
 import { addTrackToFirestore } from '../services/trackService';
-import { Upload, Play, Trash2, FolderPlus, ArrowLeft, Film, Edit2, FolderInput, X, Clock, Calendar, MapPin, Search, Share2, Users } from 'lucide-react';
+import { Upload, Play, Trash2, FolderPlus, ArrowLeft, Film, Edit2, FolderInput, X, Clock, Calendar, MapPin, Search, Share2, Users, Download } from 'lucide-react';
 import { Track, UserRole } from '../types';
 
 // Generate thumbnail from video first frame using hidden video element
@@ -264,7 +264,13 @@ export const Videos = () => {
           <div className="relative w-full max-w-6xl aspect-video bg-black rounded-2xl overflow-hidden shadow-2xl border border-white/10">
             <div className="absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/80 to-transparent flex justify-between items-start z-10">
               <div><h2 className="text-white text-xl font-bold">{viewingVideo.title}</h2></div>
-              <button onClick={() => setViewingVideo(null)} className="p-2 bg-white/10 hover:bg-red-500 text-white rounded-full transition-colors"><X size={24} /></button>
+              <div className="flex items-center gap-2">
+                <a href={viewingVideo.src} download={viewingVideo.title + '.webm'} target="_blank" rel="noopener noreferrer"
+                  className="p-2 bg-green-500/20 hover:bg-green-500/40 text-green-400 rounded-full transition-colors" title="Descargar">
+                  <Download size={20} />
+                </a>
+                <button onClick={() => setViewingVideo(null)} className="p-2 bg-white/10 hover:bg-red-500 text-white rounded-full transition-colors"><X size={24} /></button>
+              </div>
             </div>
             <video src={viewingVideo.src} className="w-full h-full object-contain" controls autoPlay />
           </div>
@@ -577,6 +583,9 @@ export const Videos = () => {
                     {/* Admin actions */}
                     {isAdmin && !showUploadMenu && (
                       <div className="flex items-center gap-1 mt-2 pt-2 border-t border-white/5">
+                        <a href={track.src} download={track.title + '.webm'} target="_blank" rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="p-1.5 text-green-400 hover:bg-green-500/20 rounded text-[10px] flex items-center gap-1"><Download size={12} /><span className="hidden sm:inline">Descargar</span></a>
                         <button onClick={() => setMovingVideo(track)} className="p-1.5 text-blue-400 hover:bg-blue-500/20 rounded text-[10px] flex items-center gap-1"><FolderInput size={12} /><span className="hidden sm:inline">Mover</span></button>
                         <button onClick={() => setEditingVideo({ id: track.id, title: track.title, artist: track.artist })} className="p-1.5 text-gray-400 hover:bg-white/20 rounded text-[10px] flex items-center gap-1"><Edit2 size={12} /><span className="hidden sm:inline">Editar</span></button>
                         <button onClick={() => removeTrackToTrash(track)} className="p-1.5 text-red-400 hover:bg-red-500/20 rounded text-[10px] flex items-center gap-1"><Trash2 size={12} /><span className="hidden sm:inline">Eliminar</span></button>
