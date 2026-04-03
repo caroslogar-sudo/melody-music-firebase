@@ -76,6 +76,38 @@ export const Videos = () => {
   const [movingVideo, setMovingVideo] = useState<Track | null>(null);
   const [targetMoveFolder, setTargetMoveFolder] = useState('');
   const [viewingVideo, setViewingVideo] = useState<Track | null>(null);
+
+  // Force download (bypasses CORS issues with Firebase Storage URLs)
+  const handleDownload = async (url: string, filename: string) => {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      window.open(url, '_blank');
+    }
+  };
+  const handleShareVideo = async (url: string, title: string) => {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const file = new File([blob], `${title}.webm`, { type: blob.type });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title, files: [file] });
+      } else {
+        window.open(`https://wa.me/?text=${encodeURIComponent(`🎬 ${title}\n${url}`)}`, '_blank');
+      }
+    } catch {
+      window.open(`https://wa.me/?text=${encodeURIComponent(`🎬 ${title}\n${url}`)}`, '_blank');
+    }
+  };
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState<'uploading' | 'success' | 'error' | null>(null);
   const [uploadFileName, setUploadFileName] = useState('');
@@ -265,10 +297,14 @@ export const Videos = () => {
             <div className="absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/80 to-transparent flex justify-between items-start z-10">
               <div><h2 className="text-white text-xl font-bold">{viewingVideo.title}</h2></div>
               <div className="flex items-center gap-2">
-                <a href={viewingVideo.src} download={viewingVideo.title + '.webm'} target="_blank" rel="noopener noreferrer"
+                <button onClick={() => handleShareVideo(viewingVideo.src, viewingVideo.title)}
+                  className="p-2 bg-blue-500/20 hover:bg-blue-500/40 text-blue-400 rounded-full transition-colors" title="Compartir">
+                  <Share2 size={20} />
+                </button>
+                <button onClick={() => handleDownload(viewingVideo.src, viewingVideo.title + '.webm')}
                   className="p-2 bg-green-500/20 hover:bg-green-500/40 text-green-400 rounded-full transition-colors" title="Descargar">
                   <Download size={20} />
-                </a>
+                </button>
                 <button onClick={() => setViewingVideo(null)} className="p-2 bg-white/10 hover:bg-red-500 text-white rounded-full transition-colors"><X size={24} /></button>
               </div>
             </div>
@@ -583,9 +619,10 @@ export const Videos = () => {
                     {/* Admin actions */}
                     {isAdmin && !showUploadMenu && (
                       <div className="flex items-center gap-1 mt-2 pt-2 border-t border-white/5">
-                        <a href={track.src} download={track.title + '.webm'} target="_blank" rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="p-1.5 text-green-400 hover:bg-green-500/20 rounded text-[10px] flex items-center gap-1"><Download size={12} /><span className="hidden sm:inline">Descargar</span></a>
+                        <button onClick={(e) => { e.stopPropagation(); handleShareVideo(track.src, track.title); }}
+                          className="p-1.5 text-blue-400 hover:bg-blue-500/20 rounded text-[10px] flex items-center gap-1"><Share2 size={12} /><span className="hidden sm:inline">Compartir</span></button>
+                        <button onClick={(e) => { e.stopPropagation(); handleDownload(track.src, track.title + '.webm'); }}
+                          className="p-1.5 text-green-400 hover:bg-green-500/20 rounded text-[10px] flex items-center gap-1"><Download size={12} /><span className="hidden sm:inline">Descargar</span></button>
                         <button onClick={() => setMovingVideo(track)} className="p-1.5 text-blue-400 hover:bg-blue-500/20 rounded text-[10px] flex items-center gap-1"><FolderInput size={12} /><span className="hidden sm:inline">Mover</span></button>
                         <button onClick={() => setEditingVideo({ id: track.id, title: track.title, artist: track.artist })} className="p-1.5 text-gray-400 hover:bg-white/20 rounded text-[10px] flex items-center gap-1"><Edit2 size={12} /><span className="hidden sm:inline">Editar</span></button>
                         <button onClick={() => removeTrackToTrash(track)} className="p-1.5 text-red-400 hover:bg-red-500/20 rounded text-[10px] flex items-center gap-1"><Trash2 size={12} /><span className="hidden sm:inline">Eliminar</span></button>

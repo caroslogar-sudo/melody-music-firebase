@@ -8,6 +8,7 @@ import { useCovers, getCoverFallback } from '../hooks/useCovers';
 import { Upload, Play, Trash2, FolderPlus, ArrowLeft, Music as MusicIcon, Edit2, Folder, FolderInput, Search, X, Share2, Users, Heart } from 'lucide-react';
 import { Track, UserRole } from '../types';
 import { subscribeFavorites, toggleFavorite } from '../services/favoritesService';
+import { notifyNewMusic } from '../services/whatsappService';
 
 export const Music = () => {
   const { library, playTrack, playQueue, removeTrackToTrash, updateTrack, currentTrack, isPlaying, user, renameFolder, deleteFolder, refreshStorageUsage, groups, users } = useApp();
@@ -195,6 +196,10 @@ export const Music = () => {
     if (failed === 0) {
       setUploadStatus('success');
       setUploadFileName(`${total} cancion${total !== 1 ? 'es' : ''} subida${total !== 1 ? 's' : ''}`);
+      // Notify all users via WhatsApp
+      if (user) {
+        notifyNewMusic(user.displayName, `${total} cancion${total !== 1 ? 'es' : ''} nueva${total !== 1 ? 's' : ''}`, targetPath || 'Musica').catch(() => {});
+      }
     } else {
       setUploadStatus('error');
       setUploadFileName(`${done - failed} subidas, ${failed} fallida${failed !== 1 ? 's' : ''}`);
@@ -214,6 +219,22 @@ export const Music = () => {
     });
     setShowCreateFolder(false);
     setNewFolderName('');
+  };
+
+  const handleShareTrack = async (track: Track) => {
+    try {
+      const res = await fetch(track.src);
+      const blob = await res.blob();
+      const ext = track.src.split('.').pop()?.split('?')[0] || 'mp3';
+      const file = new File([blob], `${track.title}.${ext}`, { type: blob.type });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: `${track.title} - ${track.artist}`, files: [file] });
+      } else {
+        window.open(`https://wa.me/?text=${encodeURIComponent(`🎵 ${track.title} - ${track.artist}\n${track.src}`)}`, '_blank');
+      }
+    } catch {
+      window.open(`https://wa.me/?text=${encodeURIComponent(`🎵 ${track.title} - ${track.artist}\n${track.src}`)}`, '_blank');
+    }
   };
 
   const handleMoveTrack = async () => {
@@ -654,6 +675,7 @@ export const Music = () => {
                         </button>
                         {isAdmin && !showUploadMenu && (
                           <>
+                            <button onClick={() => handleShareTrack(track)} className="p-1 text-green-400 hover:bg-green-500/20 rounded" title="Compartir"><Share2 size={13} /></button>
                             <button onClick={() => setMovingTrack(track)} className="p-1 text-blue-400 hover:bg-blue-500/20 rounded"><FolderInput size={13} /></button>
                             <button onClick={() => setEditingTrack({ id: track.id, title: track.title, artist: track.artist })} className="p-1 text-gray-400 hover:bg-white/20 rounded"><Edit2 size={13} /></button>
                             <button onClick={() => removeTrackToTrash(track)} className="p-1 text-red-400 hover:bg-red-500/20 rounded"><Trash2 size={13} /></button>

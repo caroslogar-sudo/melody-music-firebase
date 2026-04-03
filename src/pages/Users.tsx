@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { GlassCard } from '../components/ui/GlassCard';
 import { UserRole, AppUser } from '../types';
-import { Users as UsersIcon, Shield, ShieldCheck, Crown, Check, XCircle, ChevronDown, Trash2, Plus, X, UserPlus, FolderLock, Folder, ChevronRight, Phone, Key, MessageSquare } from 'lucide-react';
+import { Users as UsersIcon, Shield, ShieldCheck, Crown, Check, XCircle, ChevronDown, Trash2, Plus, X, UserPlus, FolderLock, Folder, ChevronRight, Phone } from 'lucide-react';
 import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 
@@ -19,8 +19,6 @@ export const Users: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'users' | 'groups'>('users');
   const [editingPhone, setEditingPhone] = useState<string | null>(null);
   const [phoneValue, setPhoneValue] = useState('');
-  const [editingApiKey, setEditingApiKey] = useState<string | null>(null);
-  const [apiKeyValue, setApiKeyValue] = useState('');
 
   // Folder permissions state
   const [editingFoldersUid, setEditingFoldersUid] = useState<string | null>(null);
@@ -90,16 +88,6 @@ export const Users: React.FC = () => {
       setEditingPhone(null);
       setPhoneValue('');
     } catch (err) { console.error('Phone save error:', err); }
-  };
-
-  const saveApiKey = async (uid: string) => {
-    const cleaned = apiKeyValue.trim();
-    try {
-      await updateDoc(doc(db, 'users', uid), { callmebotApiKey: cleaned });
-      await refreshUsers();
-      setEditingApiKey(null);
-      setApiKeyValue('');
-    } catch (err) { console.error('ApiKey save error:', err); }
   };
 
   const handleCreateGroup = async () => {
@@ -304,31 +292,6 @@ export const Users: React.FC = () => {
                       <Phone size={9} /> {masterUser.phone || 'Añadir telefono'}
                     </p>
                   )}
-                  {/* CallMeBot ApiKey */}
-                  {editingApiKey === masterUser.uid ? (
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <Key size={10} className="text-yellow-400 flex-shrink-0" />
-                      <input type="text" value={apiKeyValue} onChange={(e) => setApiKeyValue(e.target.value)}
-                        placeholder="CallMeBot API Key"
-                        className="bg-white/10 border border-white/15 rounded px-2 py-0.5 text-[10px] text-white outline-none focus:border-yellow-400 w-32"
-                        onKeyDown={(e) => e.key === 'Enter' && saveApiKey(masterUser.uid)} autoFocus />
-                      <button onClick={() => saveApiKey(masterUser.uid)} className="text-yellow-400 text-[10px] font-bold">OK</button>
-                      <button onClick={() => setEditingApiKey(null)} className="text-gray-500 text-[10px]">✕</button>
-                    </div>
-                  ) : (
-                    <p className="text-[10px] text-gray-500 flex items-center gap-1 mt-0.5 cursor-pointer hover:text-yellow-400"
-                      onClick={() => { setEditingApiKey(masterUser.uid); setApiKeyValue(masterUser.callmebotApiKey || ''); }}>
-                      <Key size={9} /> {masterUser.callmebotApiKey ? '••••' + masterUser.callmebotApiKey.slice(-4) : 'Añadir API Key'}
-                    </p>
-                  )}
-                  {/* WhatsApp activation button */}
-                  {!masterUser.callmebotApiKey && (
-                    <a href="https://wa.me/34621062163?text=I%20allow%20callmebot%20to%20send%20me%20messages"
-                      target="_blank" rel="noopener noreferrer"
-                      className="mt-1 inline-flex items-center gap-1 text-[9px] text-green-400 bg-green-500/10 px-2 py-0.5 rounded-full border border-green-500/20 hover:bg-green-500/20">
-                      <MessageSquare size={8} /> Activar WhatsApp
-                    </a>
-                  )}
                 </div>
                 <span className="text-[10px] text-green-400 bg-green-500/10 px-2 py-0.5 rounded-full border border-green-500/20">Activo</span>
               </div>
@@ -365,31 +328,6 @@ export const Users: React.FC = () => {
                         onClick={() => { setEditingPhone(u.uid); setPhoneValue(u.phone || ''); }}>
                         <Phone size={9} /> {u.phone || 'Añadir telefono'}
                       </p>
-                    )}
-                    {/* CallMeBot ApiKey */}
-                    {editingApiKey === u.uid ? (
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <Key size={10} className="text-yellow-400 flex-shrink-0" />
-                        <input type="text" value={apiKeyValue} onChange={(e) => setApiKeyValue(e.target.value)}
-                          placeholder="CallMeBot API Key"
-                          className="bg-white/10 border border-white/15 rounded px-2 py-0.5 text-[10px] text-white outline-none focus:border-yellow-400 w-32"
-                          onKeyDown={(e) => e.key === 'Enter' && saveApiKey(u.uid)} autoFocus />
-                        <button onClick={() => saveApiKey(u.uid)} className="text-yellow-400 text-[10px] font-bold">OK</button>
-                        <button onClick={() => setEditingApiKey(null)} className="text-gray-500 text-[10px]">✕</button>
-                      </div>
-                    ) : (
-                      <p className="text-[10px] text-gray-500 flex items-center gap-1 mt-0.5 cursor-pointer hover:text-yellow-400"
-                        onClick={() => { setEditingApiKey(u.uid); setApiKeyValue(u.callmebotApiKey || ''); }}>
-                        <Key size={9} /> {u.callmebotApiKey ? '••••' + u.callmebotApiKey.slice(-4) : 'Añadir API Key'}
-                      </p>
-                    )}
-                    {/* WhatsApp activation button */}
-                    {!u.callmebotApiKey && (
-                      <a href="https://wa.me/34621062163?text=I%20allow%20callmebot%20to%20send%20me%20messages"
-                        target="_blank" rel="noopener noreferrer"
-                        className="mt-1 inline-flex items-center gap-1 text-[9px] text-green-400 bg-green-500/10 px-2 py-0.5 rounded-full border border-green-500/20 hover:bg-green-500/20">
-                        <MessageSquare size={8} /> Activar WhatsApp
-                      </a>
                     )}
                   </div>
                 </div>

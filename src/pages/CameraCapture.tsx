@@ -18,6 +18,7 @@ export const CameraCapture = () => {
   const [previewFile, setPreviewFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   // Clean up preview URL on unmount
   useEffect(() => {
@@ -35,47 +36,49 @@ export const CameraCapture = () => {
     e.target.value = '';
   };
 
-  // Save photo to Firebase
+  // Save photo to Firebase (original quality, optimized speed)
   const savePhoto = async () => {
     if (!previewFile || !user) return;
     setSaving(true);
+    setUploadProgress(0);
     try {
       const now = new Date();
       const dateStr = now.toLocaleDateString('es', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
       const timeStr = now.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/:/g, '');
       const ext = previewFile.name.split('.').pop() || 'jpg';
       const fileName = `foto_${dateStr}_${timeStr}.${ext}`;
-      const renamedFile = new File([previewFile], fileName, { type: previewFile.type });
+      const finalFile = new File([previewFile], fileName, { type: previewFile.type });
       const trackId = 'photo_' + Date.now();
 
-      const { promise } = uploadFile(renamedFile, 'cover', trackId, () => {});
+      // Upload with progress
+      const { promise } = uploadFile(finalFile, 'cover', trackId, setUploadProgress);
       const { url, storagePath } = await promise;
 
-      await addDoc(collection(db, 'photos'), {
-        uid: user.uid,
-        url,
-        storagePath,
-        title: `Foto ${dateStr} ${timeStr}`,
-        createdAt: Date.now(),
-      });
-
-      await refreshStorageUsage();
+      // Reset UI immediately — don't wait for Firestore/notifications
       discardPreview();
       setSavedMsg('Foto guardada');
+      setSaving(false);
       setTimeout(() => setSavedMsg(''), 2500);
-      // Notify all users via WhatsApp (fire and forget)
+
+      // Firestore + notifications in background (non-blocking)
+      addDoc(collection(db, 'photos'), {
+        uid: user.uid, url, storagePath,
+        title: `Foto ${dateStr} ${timeStr}`, createdAt: Date.now(),
+      }).catch(() => {});
+      refreshStorageUsage().catch(() => {});
       notifyNewPhoto(user.displayName, url).catch(() => {});
     } catch (err) {
       console.error('[Camera] Save photo error:', err);
       alert('Error al guardar la foto');
+      setSaving(false);
     }
-    setSaving(false);
   };
 
-  // Save video to Firebase
+  // Save video to Firebase (optimized)
   const saveVideo = async () => {
     if (!previewFile || !user) return;
     setSaving(true);
+    setUploadProgress(0);
     try {
       const now = new Date();
       const dateStr = now.toLocaleDateString('es', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
@@ -85,46 +88,44 @@ export const CameraCapture = () => {
       const renamedFile = new File([previewFile], fileName, { type: previewFile.type });
       const trackId = 'vidrec_' + Date.now();
 
-      const { promise } = uploadFile(renamedFile, 'video', trackId, () => {});
-      const { url, storagePath } = await promise;
-
-      // Get video duration
-      let duration = 0;
-      try {
+      // Get duration IN PARALLEL with upload
+      const durationPromise = new Promise<number>((resolve) => {
         const tempVid = document.createElement('video');
         tempVid.preload = 'metadata';
-        await new Promise<void>((resolve) => {
-          tempVid.onloadedmetadata = () => { duration = Math.round(tempVid.duration); resolve(); };
-          tempVid.onerror = () => resolve();
-          tempVid.src = URL.createObjectURL(previewFile);
-        });
-      } catch {}
+        tempVid.onloadedmetadata = () => { resolve(Math.round(tempVid.duration)); URL.revokeObjectURL(tempVid.src); };
+        tempVid.onerror = () => resolve(0);
+        tempVid.src = URL.createObjectURL(previewFile);
+        setTimeout(() => resolve(0), 3000); // timeout fallback
+      });
 
-      await addTrackToFirestore({
+      // Upload with progress
+      const { promise } = uploadFile(renamedFile, 'video', trackId, setUploadProgress);
+
+      // Wait for both in parallel
+      const [{ url, storagePath }, duration] = await Promise.all([promise, durationPromise]);
+
+      // Reset UI immediately
+      discardPreview();
+      setSavedMsg('Video guardado');
+      setSaving(false);
+      setTimeout(() => setSavedMsg(''), 3000);
+
+      // Firestore + notifications in background (non-blocking)
+      addTrackToFirestore({
         title: `Grabacion ${dateStr} ${timeStr}`,
         artist: user.displayName,
         folder: 'Grabaciones en directo',
-        coverUrl: '',
-        src: url,
-        storagePath,
-        duration,
-        type: 'video',
-        fileSize: previewFile.size,
-        addedAt: Date.now(),
-        addedBy: user.uid,
-      });
-
-      await refreshStorageUsage();
-      discardPreview();
-      setSavedMsg('Video guardado en Videos / Grabaciones en directo');
-      setTimeout(() => setSavedMsg(''), 3000);
-      // Notify all users via WhatsApp (fire and forget)
+        coverUrl: '', src: url, storagePath, duration,
+        type: 'video', fileSize: previewFile.size,
+        addedAt: Date.now(), addedBy: user.uid,
+      }).catch(() => {});
+      refreshStorageUsage().catch(() => {});
       notifyNewVideo(user.displayName, `Grabacion ${dateStr} ${timeStr}`, url).catch(() => {});
     } catch (err) {
       console.error('[Camera] Save video error:', err);
       alert('Error al guardar el video');
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   // Discard preview
@@ -191,20 +192,31 @@ export const CameraCapture = () => {
 
           {/* Action buttons */}
           <div className="flex items-center justify-center gap-4 flex-shrink-0">
-            <button onClick={() => { discardPreview(); (mode === 'photo' ? photoInputRef : videoInputRef).current?.click(); }}
-              className="p-3 bg-white/10 text-gray-300 rounded-full active:scale-90" title="Repetir">
-              <RotateCcw size={22} />
-            </button>
+            {!saving && (
+              <button onClick={() => { discardPreview(); (mode === 'photo' ? photoInputRef : videoInputRef).current?.click(); }}
+                className="p-3 bg-white/10 text-gray-300 rounded-full active:scale-90" title="Repetir">
+                <RotateCcw size={22} />
+              </button>
+            )}
             <button onClick={mode === 'photo' ? savePhoto : saveVideo} disabled={saving}
               className="px-6 py-3 bg-gold-500 text-white rounded-xl font-bold text-sm shadow-lg active:scale-95 flex items-center gap-2 disabled:opacity-50">
               {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-              {saving ? 'Guardando...' : mode === 'photo' ? 'Guardar foto' : 'Guardar video'}
+              {saving ? `${uploadProgress}%` : mode === 'photo' ? 'Guardar foto' : 'Guardar video'}
             </button>
-            <button onClick={discardPreview}
-              className="p-3 bg-red-500/10 text-red-400 rounded-full active:scale-90" title="Descartar">
-              <X size={22} />
-            </button>
+            {!saving && (
+              <button onClick={discardPreview}
+                className="p-3 bg-red-500/10 text-red-400 rounded-full active:scale-90" title="Descartar">
+                <X size={22} />
+              </button>
+            )}
           </div>
+
+          {/* Upload progress bar */}
+          {saving && (
+            <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
+              <div className="h-full bg-gold-500 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }} />
+            </div>
+          )}
         </>
       ) : (
         /* No preview — show capture buttons */

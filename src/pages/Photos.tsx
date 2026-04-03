@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { GlassCard } from '../components/ui/GlassCard';
-import { Image, Trash2, Download, X, Camera } from 'lucide-react';
-import { collection, onSnapshot, query, where, deleteDoc, doc } from 'firebase/firestore';
+import { Image, Trash2, Download, X, Camera, RotateCw, Sun, Contrast, Crop, FlipHorizontal, Share2 } from 'lucide-react';
+import { collection, onSnapshot, query, where, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { deleteFile } from '../services/storageService';
+import { deleteFile, uploadFile } from '../services/storageService';
 
 interface PhotoEntry {
   id: string;
@@ -16,9 +16,17 @@ interface PhotoEntry {
 }
 
 export const Photos = () => {
-  const { user } = useApp();
+  const { user, refreshStorageUsage } = useApp();
   const [photos, setPhotos] = useState<PhotoEntry[]>([]);
   const [viewing, setViewing] = useState<PhotoEntry | null>(null);
+  const [editing, setEditing] = useState<PhotoEntry | null>(null);
+  const [rotation, setRotation] = useState(0);
+  const [brightness, setBrightness] = useState(100);
+  const [contrast, setContrast] = useState(100);
+  const [flipH, setFlipH] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -51,6 +59,100 @@ export const Photos = () => {
     else label = d.toLocaleDateString('es', { day: 'numeric', month: 'long', year: 'numeric' });
     return label + ' · ' + d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
   };
+
+  // Force download (bypasses CORS issues with Firebase Storage URLs)
+  const handleDownload = async (url: string, filename: string) => {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      // Fallback: open in new tab
+      window.open(url, '_blank');
+    }
+  };
+
+  const handleShare = async (url: string, title: string) => {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const ext = blob.type.includes('png') ? 'png' : 'jpg';
+      const file = new File([blob], `${title}.${ext}`, { type: blob.type });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title, files: [file] });
+      } else {
+        window.open(`https://wa.me/?text=${encodeURIComponent(`📸 ${title}\n${url}`)}`, '_blank');
+      }
+    } catch {
+      window.open(`https://wa.me/?text=${encodeURIComponent(`📸 ${title}\n${url}`)}`, '_blank');
+    }
+  };
+
+  // Open editor
+  const openEditor = (photo: PhotoEntry) => {
+    setEditing(photo);
+    setRotation(0);
+    setBrightness(100);
+    setContrast(100);
+    setFlipH(false);
+    setViewing(null);
+  };
+
+  // Save edited photo (overwrites original)
+  const saveEditedPhoto = async () => {
+    if (!editing || !imgRef.current || !canvasRef.current || !user) return;
+    setSavingEdit(true);
+    try {
+      const img = imgRef.current;
+      const canvas = canvasRef.current;
+      const isRotated = rotation === 90 || rotation === 270;
+      canvas.width = isRotated ? img.naturalHeight : img.naturalWidth;
+      canvas.height = isRotated ? img.naturalWidth : img.naturalHeight;
+      const ctx = canvas.getContext('2d')!;
+
+      ctx.filter = `brightness(${brightness}%) contrast(${contrast}%)`;
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate((rotation * Math.PI) / 180);
+      if (flipH) ctx.scale(-1, 1);
+      ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+
+      const blob = await new Promise<Blob>((resolve) => {
+        canvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.92);
+      });
+
+      const file = new File([blob], 'edited.jpg', { type: 'image/jpeg' });
+      const trackId = 'photo_edit_' + Date.now();
+      const { promise } = uploadFile(file, 'cover', trackId, () => {});
+      const { url, storagePath } = await promise;
+
+      // Update Firestore doc with new URL
+      await updateDoc(doc(db, 'photos', editing.id), { url, storagePath });
+
+      // Delete old file from storage
+      if (editing.storagePath) {
+        try { await deleteFile(editing.storagePath, 0, 'cover'); } catch {}
+      }
+
+      await refreshStorageUsage();
+      setEditing(null);
+    } catch (err) {
+      console.error('[Photos] Save edit error:', err);
+      alert('Error al guardar la edicion');
+    }
+    setSavingEdit(false);
+  };
+
+  const editorStyle = editing ? {
+    filter: `brightness(${brightness}%) contrast(${contrast}%)`,
+    transform: `rotate(${rotation}deg) scaleX(${flipH ? -1 : 1})`,
+  } : {};
 
   if (!user) return null;
 
@@ -108,14 +210,90 @@ export const Photos = () => {
 
           <p className="text-gray-400 text-sm mt-4">{formatDate(viewing.createdAt)}</p>
 
-          <div className="flex gap-3 mt-3" onClick={(e) => e.stopPropagation()}>
-            <a href={viewing.url} download={viewing.title + '.jpg'} target="_blank" rel="noopener noreferrer"
+          <div className="flex gap-2 mt-3 flex-wrap justify-center" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => handleDownload(viewing.url, viewing.title + '.jpg')}
               className="flex items-center gap-2 px-4 py-2.5 bg-gold-500 text-white rounded-xl text-xs font-bold active:scale-95">
               <Download size={14} /> Descargar
-            </a>
+            </button>
+            <button onClick={() => handleShare(viewing.url, viewing.title)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-green-500/20 text-green-400 rounded-xl text-xs font-bold active:scale-95 border border-green-500/20">
+              <Share2 size={14} /> Compartir
+            </button>
+            <button onClick={() => openEditor(viewing)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-blue-500/20 text-blue-400 rounded-xl text-xs font-bold active:scale-95 border border-blue-500/20">
+              <Sun size={14} /> Editar
+            </button>
             <button onClick={() => handleDelete(viewing)}
               className="flex items-center gap-2 px-4 py-2.5 bg-red-500/20 text-red-400 rounded-xl text-xs font-bold active:scale-95 border border-red-500/20">
               <Trash2 size={14} /> Eliminar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Photo editor */}
+      {editing && (
+        <div className="fixed inset-0 z-[260] bg-black flex flex-col">
+          <canvas ref={canvasRef} className="hidden" />
+          {/* Header */}
+          <div className="flex items-center justify-between p-3 bg-black/80 border-b border-white/10 flex-shrink-0">
+            <button onClick={() => setEditing(null)} className="text-gray-400 text-sm px-3 py-1.5 rounded-lg hover:text-white">
+              Cancelar
+            </button>
+            <p className="text-white text-sm font-bold">Editar foto</p>
+            <button onClick={saveEditedPhoto} disabled={savingEdit}
+              className="bg-gold-500 text-white text-sm px-4 py-1.5 rounded-lg font-bold active:scale-95 disabled:opacity-50">
+              {savingEdit ? 'Guardando...' : 'Guardar'}
+            </button>
+          </div>
+
+          {/* Preview */}
+          <div className="flex-1 flex items-center justify-center overflow-hidden p-4">
+            <img ref={imgRef} src={editing.url} alt="" crossOrigin="anonymous"
+              className="max-w-full max-h-full object-contain rounded-lg transition-all duration-200"
+              style={editorStyle} />
+          </div>
+
+          {/* Controls */}
+          <div className="bg-[#111] border-t border-white/10 p-4 space-y-3 flex-shrink-0">
+            {/* Quick actions */}
+            <div className="flex justify-center gap-4">
+              <button onClick={() => setRotation((rotation + 90) % 360)}
+                className="flex flex-col items-center gap-1 text-gray-400 hover:text-white active:scale-90">
+                <RotateCw size={20} />
+                <span className="text-[9px]">Rotar</span>
+              </button>
+              <button onClick={() => setFlipH(!flipH)}
+                className={'flex flex-col items-center gap-1 active:scale-90 ' + (flipH ? 'text-gold-400' : 'text-gray-400 hover:text-white')}>
+                <FlipHorizontal size={20} />
+                <span className="text-[9px]">Voltear</span>
+              </button>
+            </div>
+
+            {/* Brightness */}
+            <div className="flex items-center gap-3">
+              <Sun size={14} className="text-yellow-400 flex-shrink-0" />
+              <span className="text-[10px] text-gray-500 w-12">Brillo</span>
+              <input type="range" min="30" max="200" value={brightness}
+                onChange={(e) => setBrightness(Number(e.target.value))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-yellow-400 [&::-webkit-slider-thumb]:rounded-full" />
+              <span className="text-[10px] text-gray-500 w-8 text-right">{brightness}%</span>
+            </div>
+
+            {/* Contrast */}
+            <div className="flex items-center gap-3">
+              <Contrast size={14} className="text-blue-400 flex-shrink-0" />
+              <span className="text-[10px] text-gray-500 w-12">Contraste</span>
+              <input type="range" min="30" max="200" value={contrast}
+                onChange={(e) => setContrast(Number(e.target.value))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-blue-400 [&::-webkit-slider-thumb]:rounded-full" />
+              <span className="text-[10px] text-gray-500 w-8 text-right">{contrast}%</span>
+            </div>
+
+            {/* Reset */}
+            <button onClick={() => { setRotation(0); setBrightness(100); setContrast(100); setFlipH(false); }}
+              className="w-full text-center text-[10px] text-gray-500 hover:text-white py-1">
+              Restablecer valores originales
             </button>
           </div>
         </div>

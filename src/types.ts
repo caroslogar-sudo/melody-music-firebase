@@ -11,7 +11,6 @@ export interface AppUser {
   role: UserRole;
   avatarUrl?: string;
   phone?: string; // WhatsApp number with country code, e.g. "+34612345678"
-  callmebotApiKey?: string; // CallMeBot API key for WhatsApp notifications
   approved: boolean;
   createdAt: number;
   online?: boolean;

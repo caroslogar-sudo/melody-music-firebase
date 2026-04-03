@@ -8,6 +8,7 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../services/firebase';
 import { createUserProfile } from '../services/authService';
 import { uploadFile, recalculateStorageUsage } from '../services/storageService';
+import { getWhatsAppConfig, saveWhatsAppConfig, WhatsAppConfig } from '../services/whatsappService';
 
 export const Settings = () => {
   const { user, users, updateUserProfileAction, approveUserAction, rejectUserAction, changeUserRoleAction, refreshUsers, refreshStorageUsage } = useApp();
@@ -17,7 +18,19 @@ export const Settings = () => {
   const [editName, setEditName] = useState(user?.displayName || '');
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
+  const [waPhone, setWaPhone] = useState('');
+  const [waApiKey, setWaApiKey] = useState('');
+  const [waEnabled, setWaEnabled] = useState(false);
+  const [waSaving, setWaSaving] = useState(false);
+  const [waMsg, setWaMsg] = useState('');
   const avatarInputRef = useRef<HTMLInputElement>(null);
+
+  // Load WhatsApp config
+  React.useEffect(() => {
+    getWhatsAppConfig().then(c => {
+      if (c) { setWaPhone(c.phone); setWaApiKey(c.apiKey); setWaEnabled(c.enabled); }
+    });
+  }, []);
 
   if (user?.role !== UserRole.MASTER) {
     return <div className="flex items-center justify-center h-full text-white/50">No tienes acceso a esta sección.</div>;
@@ -240,6 +253,63 @@ export const Settings = () => {
             'Recalcular almacenamiento real'
           )}
         </button>
+      </section>
+
+      {/* WhatsApp Notifications */}
+      <section>
+        <h3 className="text-lg font-bold text-white mb-4">Notificaciones WhatsApp</h3>
+        <GlassCard className="bg-white/5 border-white/10 !p-4 space-y-3">
+          <p className="text-xs text-gray-400">Recibe notificaciones en tu WhatsApp cuando se sube contenido nuevo. Usa CallMeBot (gratuito).</p>
+          
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-wider">Tu numero WhatsApp</label>
+            <input type="tel" value={waPhone} onChange={(e) => setWaPhone(e.target.value)}
+              placeholder="+34 612 345 678"
+              className="w-full bg-white/10 border border-white/15 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-green-400 mt-1" />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-gray-500 uppercase tracking-wider">CallMeBot API Key</label>
+            <input type="text" value={waApiKey} onChange={(e) => setWaApiKey(e.target.value)}
+              placeholder="123456"
+              className="w-full bg-white/10 border border-white/15 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-yellow-400 mt-1" />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-400">Activar notificaciones</span>
+            <button onClick={() => setWaEnabled(!waEnabled)}
+              className={`w-10 h-5 rounded-full transition-colors relative ${waEnabled ? 'bg-green-500' : 'bg-gray-600'}`}>
+              <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${waEnabled ? 'left-5' : 'left-0.5'}`} />
+            </button>
+          </div>
+
+          <button onClick={async () => {
+            setWaSaving(true);
+            await saveWhatsAppConfig({ phone: waPhone.replace(/\s/g, ''), apiKey: waApiKey.trim(), enabled: waEnabled });
+            setWaMsg('Configuracion guardada');
+            setWaSaving(false);
+            setTimeout(() => setWaMsg(''), 2000);
+          }} disabled={waSaving}
+            className="w-full bg-green-500/20 border border-green-500/20 text-green-400 py-2.5 rounded-xl text-xs font-bold active:scale-95 disabled:opacity-50">
+            {waSaving ? 'Guardando...' : 'Guardar configuracion WhatsApp'}
+          </button>
+
+          {waMsg && <p className="text-green-400 text-xs text-center">{waMsg}</p>}
+
+          {!waApiKey && (
+            <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-3">
+              <p className="text-yellow-400 text-[10px] font-bold mb-1">Como obtener tu API Key:</p>
+              <p className="text-yellow-200/70 text-[10px]">1. Añade +34 621 062 163 a tus contactos</p>
+              <p className="text-yellow-200/70 text-[10px]">2. Enviale por WhatsApp: "I allow callmebot to send me messages"</p>
+              <p className="text-yellow-200/70 text-[10px]">3. Recibiras tu API Key en 1-2 minutos</p>
+              <a href="https://wa.me/34621062163?text=I%20allow%20callmebot%20to%20send%20me%20messages"
+                target="_blank" rel="noopener noreferrer"
+                className="mt-2 inline-flex items-center gap-1 text-[10px] text-green-400 bg-green-500/10 px-3 py-1 rounded-full border border-green-500/20 hover:bg-green-500/20">
+                Activar CallMeBot
+              </a>
+            </div>
+          )}
+        </GlassCard>
       </section>
 
       {/* Admin */}
