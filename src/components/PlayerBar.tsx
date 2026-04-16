@@ -131,6 +131,10 @@ export const PlayerBar = () => {
     el.load();
     setCurrentTime(0);
     setDuration(0);
+    // Create AudioContext for interrupt recovery (only once)
+    if (!(window as any).__melodyAudioCtx) {
+      try { (window as any).__melodyAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)(); } catch {}
+    }
     if (isPlaying) {
       const p = el.play();
       if (p) p.catch(() => {
@@ -159,17 +163,23 @@ export const PlayerBar = () => {
         onTrackEndedRef.current();
       }
     };
-    // Recovery: if audio stalls or errors, try to continue
     const onError = () => {
       console.warn('[Player] Audio error, attempting next track');
       setTimeout(() => onTrackEndedRef.current(), 500);
     };
     const onStalled = () => {
       console.warn('[Player] Audio stalled');
-      // Try to resume
       setTimeout(() => {
         if (el.paused && isPlaying) el.play().catch(() => {});
       }, 1000);
+    };
+    // CRITICAL: Detect when system pauses audio (phone call, other app)
+    // and sync React state so the play button in car/lock screen works
+    const onSystemPause = () => {
+      if (isPlayingRef.current) {
+        console.log('[Player] System paused audio (phone call?) - syncing state');
+        togglePlay(); // Set isPlaying = false in React
+      }
     };
 
     el.addEventListener('timeupdate', onTime);
@@ -177,6 +187,7 @@ export const PlayerBar = () => {
     el.addEventListener('ended', onEnded);
     el.addEventListener('error', onError);
     el.addEventListener('stalled', onStalled);
+    el.addEventListener('pause', onSystemPause);
 
     return () => {
       el.removeEventListener('timeupdate', onTime);
@@ -184,56 +195,161 @@ export const PlayerBar = () => {
       el.removeEventListener('ended', onEnded);
       el.removeEventListener('error', onError);
       el.removeEventListener('stalled', onStalled);
+      el.removeEventListener('pause', onSystemPause);
     };
   }, []); // Empty deps - uses refs for everything
 
+  // Keep refs in sync for Media Session handlers
+  const isPlayingRef = useRef(isPlaying);
+  const currentTrackRef = useRef(currentTrack);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { currentTrackRef.current = currentTrack; }, [currentTrack]);
+
   // ===== MEDIA SESSION API (Bluetooth car controls + lock screen) =====
+  // Robust: re-registers handlers on visibility change to survive phone call interruptions
   useEffect(() => {
     if (!currentTrack || !('mediaSession' in navigator)) return;
 
-    const artworkUrl = coverUrl || coverFallback;
+    const registerHandlers = () => {
+      const artworkUrl = coverUrl || coverFallback;
 
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: currentTrack.title,
-      artist: currentTrack.artist,
-      album: currentTrack.album || currentTrack.folder || 'Melody Music',
-      artwork: artworkUrl ? [
-        { src: artworkUrl, sizes: '96x96', type: 'image/png' },
-        { src: artworkUrl, sizes: '128x128', type: 'image/png' },
-        { src: artworkUrl, sizes: '192x192', type: 'image/png' },
-        { src: artworkUrl, sizes: '256x256', type: 'image/png' },
-        { src: artworkUrl, sizes: '384x384', type: 'image/png' },
-        { src: artworkUrl, sizes: '512x512', type: 'image/png' },
-      ] : [],
-    });
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentTrack.title,
+        artist: currentTrack.artist,
+        album: currentTrack.album || currentTrack.folder || 'Melody Music',
+        artwork: artworkUrl ? [
+          { src: artworkUrl, sizes: '96x96', type: 'image/png' },
+          { src: artworkUrl, sizes: '128x128', type: 'image/png' },
+          { src: artworkUrl, sizes: '192x192', type: 'image/png' },
+          { src: artworkUrl, sizes: '256x256', type: 'image/png' },
+          { src: artworkUrl, sizes: '384x384', type: 'image/png' },
+          { src: artworkUrl, sizes: '512x512', type: 'image/png' },
+        ] : [],
+      });
 
-    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+      navigator.mediaSession.playbackState = isPlayingRef.current ? 'playing' : 'paused';
 
-    navigator.mediaSession.setActionHandler('play', () => togglePlay());
-    navigator.mediaSession.setActionHandler('pause', () => togglePlay());
-    navigator.mediaSession.setActionHandler('previoustrack', () => prevTrack());
-    navigator.mediaSession.setActionHandler('nexttrack', () => nextTrack());
-    navigator.mediaSession.setActionHandler('stop', () => closePlayer());
+      // Play handler: robust recovery after phone calls and system interruptions
+      navigator.mediaSession.setActionHandler('play', async () => {
+        const el = audioRef.current;
+        if (!el) { togglePlay(); return; }
 
-    try {
-      navigator.mediaSession.setActionHandler('seekto', (details) => {
-        if (audioRef.current && details.seekTime != null) {
-          audioRef.current.currentTime = details.seekTime;
+        console.log('[Player] Media Session play triggered');
+
+        // Step 1: Resume AudioContext if suspended (Chrome Android requirement after interruption)
+        try {
+          const ctx = (window as any).__melodyAudioCtx;
+          if (ctx && ctx.state === 'suspended') {
+            await ctx.resume();
+            console.log('[Player] AudioContext resumed');
+          }
+        } catch {}
+
+        // Step 2: Ensure src is loaded
+        if (!el.src || el.src === '' || el.src === window.location.href) {
+          if (currentTrackRef.current) {
+            el.src = currentTrackRef.current.src;
+            el.load();
+            console.log('[Player] Reloaded audio src after interruption');
+          }
+        }
+
+        // Step 3: Try to play with retries
+        const tryPlay = async (attempt: number): Promise<boolean> => {
+          try {
+            await el.play();
+            console.log('[Player] Play succeeded on attempt', attempt);
+            return true;
+          } catch (err) {
+            console.warn('[Player] Play attempt', attempt, 'failed:', err);
+            if (attempt < 3) {
+              // Reload src and retry
+              if (currentTrackRef.current) {
+                const savedTime = el.currentTime;
+                el.src = currentTrackRef.current.src;
+                el.load();
+                await new Promise(r => setTimeout(r, 300));
+                el.currentTime = savedTime;
+                return tryPlay(attempt + 1);
+              }
+            }
+            return false;
+          }
+        };
+
+        const success = await tryPlay(1);
+        if (!isPlayingRef.current) togglePlay(); // Sync React state
+        if (success) {
+          navigator.mediaSession.playbackState = 'playing';
         }
       });
-      navigator.mediaSession.setActionHandler('seekbackward', (details) => {
-        if (audioRef.current) {
-          audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - (details.seekOffset || 10));
-        }
+
+      navigator.mediaSession.setActionHandler('pause', () => {
+        const el = audioRef.current;
+        if (el && !el.paused) el.pause();
+        togglePlay();
       });
-      navigator.mediaSession.setActionHandler('seekforward', (details) => {
-        if (audioRef.current) {
-          audioRef.current.currentTime = Math.min(duration, audioRef.current.currentTime + (details.seekOffset || 10));
-        }
-      });
-    } catch { /* some browsers don't support seek actions */ }
+
+      navigator.mediaSession.setActionHandler('previoustrack', () => prevTrack());
+      navigator.mediaSession.setActionHandler('nexttrack', () => nextTrack());
+      navigator.mediaSession.setActionHandler('stop', () => closePlayer());
+
+      try {
+        navigator.mediaSession.setActionHandler('seekto', (details) => {
+          if (audioRef.current && details.seekTime != null) {
+            audioRef.current.currentTime = details.seekTime;
+          }
+        });
+        navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+          if (audioRef.current) {
+            audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - (details.seekOffset || 10));
+          }
+        });
+        navigator.mediaSession.setActionHandler('seekforward', (details) => {
+          if (audioRef.current) {
+            audioRef.current.currentTime = Math.min(duration, audioRef.current.currentTime + (details.seekOffset || 10));
+          }
+        });
+      } catch {}
+    };
+
+    // Register immediately
+    registerHandlers();
+
+    // Re-register when app comes back from background (after phone call)
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('[Player] App resumed from background');
+        // Small delay to let the system settle after phone call
+        setTimeout(() => {
+          registerHandlers();
+          const el = audioRef.current;
+          if (el) {
+            if (!el.paused) {
+              navigator.mediaSession.playbackState = 'playing';
+            } else if (el.src && el.currentTime > 0) {
+              // Audio was paused by system (phone call)
+              navigator.mediaSession.playbackState = 'paused';
+              // Sync React state if needed
+              if (isPlayingRef.current) {
+                togglePlay(); // Set to paused in React
+              }
+            }
+          }
+        }, 500);
+      }
+    };
+
+    const onFocus = () => {
+      registerHandlers();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', onFocus);
 
     return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', onFocus);
       try {
         navigator.mediaSession.setActionHandler('play', null);
         navigator.mediaSession.setActionHandler('pause', null);
